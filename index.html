@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A local Three.js segmented mannequin editor with joint rotation and optional pose limits.">
+  <title>ThreeJSPoser · Local pose editor</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/src/style.css">
+  <script type="importmap">{"imports":{"three":"/vendor/build/three.module.js","three/addons/":"/vendor/examples/jsm/"}}</script>
+</head>
+<body>
+  <main id="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-icon" aria-hidden="true">✳</span><div><strong>ThreeJSPoser</strong><span>Local pose editor</span></div></div>
+      <div class="history"><button id="undo" title="Undo (Ctrl+Z)" disabled>↶ <span>Undo</span></button><button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷ <span>Redo</span></button></div>
+      <div class="file-actions"><button id="import">Open pose</button><button id="export" class="primary">Save pose <span aria-hidden="true">↗</span></button><input id="pose-file" type="file" accept=".json,application/json" hidden></div>
+    </header>
+    <section id="viewport" aria-label="3D mannequin viewport">
+      <div class="scene-label"><span class="live-dot"></span> SEGMENTED MANNEQUIN <span class="muted">/ 54 JOINTS</span></div>
+      <div class="view-tools"><button id="fit" title="Frame whole mannequin (Home)">Frame body</button><button id="focus" title="Focus selected joint (F)">Focus joint</button></div>
+      <div id="boot-message" role="status">Loading local 3D editor…</div>
+      <div class="axis-legend"><span class="x">● X</span><span class="y">● Y</span><span class="z">● Z</span><span>Rotation axes</span></div>
+      <div class="axis-guide" role="img" aria-label="World orientation guide showing the X, Y, and Z axes relative to the camera">
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <line id="guide-line-x" class="guide-line guide-x" />
+          <line id="guide-line-y" class="guide-line guide-y" />
+          <line id="guide-line-z" class="guide-line guide-z" />
+          <circle id="guide-negative-x" class="guide-negative guide-x" r="2.5" />
+          <circle id="guide-negative-y" class="guide-negative guide-y" r="2.5" />
+          <circle id="guide-negative-z" class="guide-negative guide-z" r="2.5" />
+          <g id="guide-mark-x" class="guide-mark guide-x"><circle r="5" /><text>X</text></g>
+          <g id="guide-mark-y" class="guide-mark guide-y"><circle r="5" /><text>Y</text></g>
+          <g id="guide-mark-z" class="guide-mark guide-z"><circle r="5" /><text>Z</text></g>
+          <circle class="guide-center" cx="50" cy="50" r="3" />
+        </svg>
+      </div>
+      <div class="viewport-hint">Click a joint or body part to pose it <span>·</span> Drag background to orbit <span>·</span> Scroll to zoom</div>
+    </section>
+    <aside class="inspector" aria-label="Joint controls">
+      <div class="section-heading"><span>POSE CONTROLS</span><span class="version">v0.1</span></div>
+      <label class="field-label" for="joint-select">Selected joint</label>
+      <select id="joint-select" aria-label="Selected joint"></select>
+      <div class="selection-row"><span id="joint-region">Body</span><button id="reset-joint" class="text-button">Reset joint</button></div>
+      <div class="rotation-heading"><h1>Rotation</h1><span>LOCAL AXES · DEGREES</span></div>
+      <div id="angle-controls"></div>
+      <p id="joint-description" class="small-note"></p>
+      <div class="divider"></div>
+      <label class="toggle-row" for="limits"><div><strong>Hinge control &amp; joint limits</strong><span id="limit-status">Restricted joint axes</span></div><input id="limits" type="checkbox" role="switch" checked><span class="switch" aria-hidden="true"></span></label>
+      <p class="small-note constraint-note">Artistic joint limits. Body intersections and balance are not checked.</p>
+      <label class="checkbox-row"><input type="checkbox" id="show-joints" checked> Show joint markers</label>
+      <div class="divider"></div>
+      <details><summary>Hands &amp; fingers</summary><p class="small-note">Choose a finger in the joint list, then focus it for a close view. A hand preset affects only that hand.</p><div class="hand-row"><select id="hand-side" aria-label="Hand side"><option value="left">Left hand</option><option value="right">Right hand</option></select><button id="focus-hand">Focus</button></div><div class="preset-row"><button data-hand="open">Open</button><button data-hand="relaxed">Relaxed</button><button data-hand="fist">Fist</button></div></details>
+      <div class="inspector-bottom"><button id="reset-pose" class="wide-button">Reset whole pose</button><details class="help"><summary>Controls &amp; pose files</summary><p>Drag a colored ring to rotate one axis. Drag inside the orb for free rotation. Unavailable axes are hidden when joint limits are on.</p><p><kbd>F</kbd> Focus joint · <kbd>Home</kbd> Frame body<br><kbd>Ctrl Z</kbd> Undo · <kbd>Ctrl Shift Z</kbd> Redo<br>Right-drag to pan. Press <kbd>Esc</kbd> during a drag to cancel.</p><p>Save downloads a pose file. Open validates a file before applying it. Nothing is saved automatically.</p></details></div>
+    </aside>
+    <footer><span id="status" role="status" aria-live="polite">Ready</span><span>LOCAL ONLY <span class="footer-dot">·</span> THREE.JS</span></footer>
+  </main>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

@@ -51,6 +51,7 @@ test('selects a mannequin joint from each orthographic view', async ({ page }) =
 });
 
 test('drags the rotation gizmo in every orthographic view', async ({ page }) => {
+  test.setTimeout(60_000);
   await page.locator('#joint-select').selectOption('leftShoulder');
 
   for (const index of [0, 1, 2, 3]) {

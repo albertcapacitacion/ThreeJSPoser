@@ -278,29 +278,34 @@ function focusJoint(id = selected) {
   orbit.update();
   status(`Focused ${JOINT_MAP[id].label.toLowerCase()}`);
 }
+function fitCameraToBounds(index, center, size) {
+  const camera = cameras[index], pane = panes[index];
+  const width = pane.clientWidth || viewport.clientWidth / 2;
+  const height = pane.clientHeight || viewport.clientHeight / 2;
+  const aspect = Math.max(.1, width / Math.max(1, height));
+  const horizontalSize = index === 1 ? size.x : size[viewDefinitions[index].horizontal];
+  const verticalSize = index === 1 ? size.z : size.y;
+  const halfHeight = Math.max(verticalSize / 2, horizontalSize / (2 * aspect)) * 1.18;
+  camera.left = -halfHeight * aspect;
+  camera.right = halfHeight * aspect;
+  camera.top = halfHeight;
+  camera.bottom = -halfHeight;
+  camera.zoom = 1;
+  camera.position.copy(center).addScaledVector(viewDefinitions[index].direction, 5);
+  camera.lookAt(center);
+  camera.updateProjectionMatrix();
+  orbits[index].target.copy(center);
+  orbits[index].update();
+}
+function fitTopView() {
+  const box = new THREE.Box3().setFromObject(mannequin.root);
+  fitCameraToBounds(1, box.getCenter(new THREE.Vector3()), box.getSize(new THREE.Vector3()));
+}
 function fitBody() {
   const box = new THREE.Box3().setFromObject(mannequin.root);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  cameras.forEach((camera, index) => {
-    const pane = panes[index];
-    const width = pane.clientWidth || viewport.clientWidth / 2;
-    const height = pane.clientHeight || viewport.clientHeight / 2;
-    const aspect = Math.max(.1, width / Math.max(1, height));
-    const horizontalSize = index === 1 ? size.x : size[viewDefinitions[index].horizontal];
-    const verticalSize = index === 1 ? size.z : size.y;
-    const halfHeight = Math.max(verticalSize / 2, horizontalSize / (2 * aspect)) * 1.18;
-    camera.left = -halfHeight * aspect;
-    camera.right = halfHeight * aspect;
-    camera.top = halfHeight;
-    camera.bottom = -halfHeight;
-    camera.zoom = 1;
-    camera.position.copy(center).addScaledVector(viewDefinitions[index].direction, 5);
-    camera.lookAt(center);
-    camera.updateProjectionMatrix();
-    orbits[index].target.copy(center);
-    orbits[index].update();
-  });
+  cameras.forEach((_, index) => fitCameraToBounds(index, center, size));
   status('Whole mannequin framed');
 }
 $('focus').addEventListener('click', () => focusJoint());
@@ -349,7 +354,7 @@ $('pose-file').addEventListener('change', async event => {
   try {
     if (file.size > 100_000) throw new Error('Pose files must be smaller than 100 KB.');
     const next = validatePose(JSON.parse(await file.text()));
-    pose = next; mannequin.sync(pose); commit();
+    pose = next; mannequin.sync(pose); fitTopView(); commit();
     status('Pose opened · Undo restores the previous pose');
   } catch (error) { status(`Pose not opened: ${error.message}`, 'error'); }
 });

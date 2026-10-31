@@ -14,7 +14,7 @@
     <header class="topbar">
       <div class="brand"><span class="brand-icon" aria-hidden="true">✳</span><div><strong>ThreeJSPoser</strong><span>Local pose editor</span></div></div>
       <div class="history"><button id="undo" title="Undo (Ctrl+Z)" disabled>↶ <span>Undo</span></button><button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷ <span>Redo</span></button></div>
-      <div class="file-actions"><button id="import">Open pose</button><button id="export" class="primary">Save pose <span aria-hidden="true">↗</span></button><input id="pose-file" type="file" accept=".json,application/json" hidden></div>
+      <div class="file-actions"><button id="import">Open pose</button><button id="export">Save pose</button><button id="export-references" class="primary">Export references</button><input id="pose-file" type="file" accept=".json,application/json" hidden></div>
     </header>
     <section id="viewport" aria-label="3D mannequin viewport">
       <div class="view-tools"><button id="fit" title="Frame whole mannequin (Home)">Frame body</button><button id="focus" title="Focus selected joint (F)">Focus joint</button></div>
@@ -44,6 +44,13 @@
     </aside>
     <footer><span id="status" role="status" aria-live="polite">Ready</span><span>LOCAL ONLY <span class="footer-dot">·</span> THREE.JS</span></footer>
   </main>
+  <dialog id="reference-dialog" aria-labelledby="reference-title">
+    <form method="dialog" class="reference-shell">
+      <header class="reference-header"><div><h2 id="reference-title">Export pose references</h2><p>All four full-body views are included. Add close-ups to views where you need more detail.</p></div><button value="cancel" aria-label="Close">×</button></header>
+      <div id="reference-views" class="reference-views"></div>
+      <div class="reference-footer"><span id="reference-count">4 full-body images</span><div><button value="cancel">Cancel</button><button type="button" id="download-references" class="primary">Download ZIP</button></div></div>
+    </form>
+  </dialog>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

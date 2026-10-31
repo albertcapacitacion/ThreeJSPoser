@@ -346,6 +346,149 @@ $('export').addEventListener('click', () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   status('Pose downloaded · keep the file to reopen it later');
 });
+const referenceDialog = $('reference-dialog');
+const referenceViews = $('reference-views');
+const referenceOptions = viewDefinitions.map((view, index) => ({ view, index, close: false, zoom: 1, target: null, position: null }));
+const referenceRenderCanvas = document.createElement('canvas');
+let referenceRenderer = null;
+function drawReferenceOptions() {
+  referenceViews.replaceChildren();
+  for (const option of referenceOptions) {
+    option.target = orbits[option.index].target.clone();
+    option.position = cameras[option.index].position.clone();
+    option.zoom = cameras[option.index].zoom;
+    const card = document.createElement('section');
+    card.className = 'reference-card';
+    const title = document.createElement('h3'); title.textContent = option.view.name;
+    const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 220; canvas.setAttribute('aria-label', `${option.view.name} reference preview`);
+    const toggleLabel = document.createElement('label');
+    const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = option.close;
+    toggle.addEventListener('change', () => { option.close = toggle.checked; updateReferencePreview(option, canvas); updateReferenceCount(); });
+    toggleLabel.append(toggle, document.createTextNode(' Add close-up'));
+    const hint = document.createElement('span'); hint.className = 'reference-hint'; hint.textContent = 'Right-drag to pan · scroll to zoom';
+    canvas.addEventListener('contextmenu', event => event.preventDefault());
+    let panStart = null;
+    canvas.addEventListener('pointerdown', event => {
+      if (!option.close || (event.button !== 2 && event.button !== 1)) return;
+      event.preventDefault(); canvas.setPointerCapture(event.pointerId); panStart = { x: event.clientX, y: event.clientY };
+    });
+    canvas.addEventListener('pointermove', event => {
+      if (!panStart) return;
+      const camera = exportCamera(option, true); const worldHeight = (camera.top - camera.bottom) / camera.zoom;
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+      const dx = (event.clientX - panStart.x) * worldHeight / canvas.height;
+      const dy = (event.clientY - panStart.y) * worldHeight / canvas.height;
+      const shift = right.multiplyScalar(-dx).addScaledVector(up, dy);
+      option.target.add(shift); option.position.add(shift);
+      panStart = { x: event.clientX, y: event.clientY };
+      updateReferencePreview(option, canvas);
+    });
+    canvas.addEventListener('pointerup', () => { panStart = null; });
+    canvas.addEventListener('pointercancel', () => { panStart = null; });
+    canvas.addEventListener('wheel', event => {
+      if (!option.close) return;
+      event.preventDefault(); option.zoom = THREE.MathUtils.clamp(option.zoom * Math.exp(-event.deltaY * .001), .5, 12);
+      updateReferencePreview(option, canvas);
+    }, { passive: false });
+    card.append(title, canvas, toggleLabel, hint);
+    referenceViews.append(card);
+    updateReferencePreview(option, canvas);
+  }
+  updateReferenceCount();
+}
+function updateReferenceCount() { $('reference-count').textContent = `4 full-body images · ${referenceOptions.filter(option => option.close).length} close-ups`; }
+function exportCamera(option, close = false) {
+  const source = cameras[option.index];
+  const camera = new THREE.OrthographicCamera(source.left, source.right, source.top, source.bottom, source.near, source.far);
+  camera.position.copy(source.position); camera.quaternion.copy(source.quaternion); camera.up.copy(viewDefinitions[option.index].up);
+  const target = close ? option.target.clone() : orbits[option.index].target.clone();
+  if (close) camera.position.copy(option.position);
+  else camera.position.add(target.clone().sub(orbits[option.index].target));
+  camera.lookAt(target);
+  const bounds = new THREE.Box3().setFromObject(mannequin.root);
+  const size = bounds.getSize(new THREE.Vector3());
+  const aspect = referenceRenderCanvas.width / referenceRenderCanvas.height;
+  const horizontal = option.index === 1 ? size.x : size[viewDefinitions[option.index].horizontal];
+  const vertical = option.index === 1 ? size.z : size.y;
+  const halfHeight = Math.max(vertical / 2, horizontal / (2 * aspect)) * 1.18;
+  camera.left = -halfHeight * aspect; camera.right = halfHeight * aspect;
+  camera.top = halfHeight; camera.bottom = -halfHeight;
+  camera.zoom = close ? option.zoom : 1; camera.updateProjectionMatrix();
+  return camera;
+}
+function updateReferencePreview(option, canvas) {
+  if (!referenceRenderer) {
+    referenceRenderer = new THREE.WebGLRenderer({ canvas: referenceRenderCanvas, antialias: true, preserveDrawingBuffer: true });
+    referenceRenderer.setPixelRatio(1);
+    referenceRenderer.outputColorSpace = THREE.SRGBColorSpace; referenceRenderer.toneMapping = THREE.ACESFilmicToneMapping; referenceRenderer.toneMappingExposure = 1.15;
+  }
+  referenceRenderCanvas.width = canvas.width; referenceRenderCanvas.height = canvas.height;
+  referenceRenderer.setSize(canvas.width, canvas.height, false);
+  const markers = mannequin.markers.map(marker => marker.visible), helpers = transforms.map(transform => transform.getHelper().visible);
+  try {
+    mannequin.setMarkersVisible(false); transforms.forEach(transform => { transform.getHelper().visible = false; });
+    referenceRenderer.render(scene, exportCamera(option, option.close));
+    canvas.getContext('2d').drawImage(referenceRenderCanvas, 0, 0, canvas.width, canvas.height);
+  } finally {
+    mannequin.markers.forEach((marker, index) => { marker.visible = markers[index]; });
+    transforms.forEach((transform, index) => { transform.getHelper().visible = helpers[index]; });
+  }
+}
+$('export-references').addEventListener('click', () => { drawReferenceOptions(); referenceDialog.showModal(); });
+let referenceExporting = false;
+referenceDialog.addEventListener('cancel', event => { if (referenceExporting) event.preventDefault(); });
+$('download-references').addEventListener('click', async () => {
+  if (referenceExporting) return;
+  referenceExporting = true;
+  const controls = [...referenceDialog.querySelectorAll('button, input, select')];
+  const priorDisabled = controls.map(control => control.disabled);
+  controls.forEach(control => { control.disabled = true; });
+  try {
+    const files = [];
+    const include = async (option, close = false) => {
+      const canvas = document.createElement('canvas'); canvas.width = 1200; canvas.height = 1600;
+      updateReferencePreview(option, canvas);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      if (blob) files.push({ name: `${option.view.name.toLowerCase()}${close ? '-closeup' : ''}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
+    };
+    for (const option of referenceOptions) { await include(option); if (option.close) await include(option, true); }
+    const contact = document.createElement('canvas'); contact.width = 1600; contact.height = Math.ceil(files.filter(file => file.name.endsWith('.png')).length / 2) * 540;
+    const contactContext = contact.getContext('2d'); contactContext.fillStyle = '#f7faf7'; contactContext.fillRect(0, 0, contact.width, contact.height);
+    for (const [index, file] of files.filter(file => file.name.endsWith('.png')).entries()) {
+      const bitmap = await createImageBitmap(new Blob([file.data], { type: 'image/png' })); const x = (index % 2) * 800, y = Math.floor(index / 2) * 540;
+      contactContext.drawImage(bitmap, x + 20, y + 48, 760, 470); contactContext.fillStyle = '#243735'; contactContext.font = '600 18px Segoe UI, sans-serif'; contactContext.fillText(file.name, x + 20, y + 30); bitmap.close();
+    }
+    const contactBlob = await new Promise(resolve => contact.toBlob(resolve, 'image/png'));
+    if (contactBlob) files.push({ name: 'overview.png', data: new Uint8Array(await contactBlob.arrayBuffer()) });
+    files.push({ name: 'pose.json', data: new TextEncoder().encode(JSON.stringify(pose, null, 2) + '\n') });
+    const closeNotes = referenceOptions.filter(option => option.close).map(option => `- ${option.view.name} close-up: camera target ${option.target.toArray().map(value => value.toFixed(3)).join(', ')}, zoom ${option.zoom.toFixed(2)}×`).join('\n');
+    const brief = `# Pose reference\n\nUse the full-body images to understand the gesture and limb placement. Close-ups show the selected region at extra scale.\n\nCharacter identity, proportions, outfit and style should come from the supplied character design sheet.\n\n## Close-up focus\n${closeNotes || 'No close-ups selected.'}\n\n## Images\n${files.filter(file => file.name.endsWith('.png')).map(file => `- ${file.name}`).join('\n')}\n`;
+    files.push({ name: 'reference.md', data: new TextEncoder().encode(brief) });
+    const zip = await createStoredZip(files);
+    const url = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
+    const link = document.createElement('a'); link.href = url; link.download = `threejs-reference-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000); referenceDialog.close(); status('Pose reference ZIP downloaded');
+  } catch (error) { status(`Reference export failed: ${error.message}`, 'error'); }
+  finally {
+    controls.forEach((control, index) => { control.disabled = priorDisabled[index]; });
+    referenceExporting = false;
+  }
+});
+function createStoredZip(files) {
+  const encoder = new TextEncoder(), chunks = [], entries = []; let offset = 0;
+  const u16 = (view, pos, value) => view.setUint16(pos, value, true), u32 = (view, pos, value) => view.setUint32(pos, value, true);
+  const crc32 = bytes => { let crc = -1; for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (-(crc & 1) & 0xedb88320); } return (crc ^ -1) >>> 0; };
+  for (const file of files) {
+    const name = encoder.encode(file.name), crc = crc32(file.data), local = new Uint8Array(30 + name.length); const lv = new DataView(local.buffer);
+    u32(lv,0,0x04034b50); u16(lv,4,20); u32(lv,14,crc); u32(lv,18,file.data.length); u32(lv,22,file.data.length); u16(lv,26,name.length); local.set(name,30); chunks.push(local,file.data);
+    entries.push({ name, crc, size:file.data.length, offset }); offset += local.length + file.data.length;
+  }
+  const centralOffset=offset;
+  for (const entry of entries) { const record=new Uint8Array(46+entry.name.length), view=new DataView(record.buffer); u32(view,0,0x02014b50); u16(view,4,20); u16(view,6,20); u32(view,16,entry.crc); u32(view,20,entry.size); u32(view,24,entry.size); u16(view,28,entry.name.length); u32(view,42,entry.offset); record.set(entry.name,46); chunks.push(record); offset+=record.length; }
+  const end=new Uint8Array(22), view=new DataView(end.buffer); u32(view,0,0x06054b50); u16(view,8,entries.length); u16(view,10,entries.length); u32(view,12,offset-centralOffset); u32(view,16,centralOffset); chunks.push(end);
+  return new Blob(chunks).arrayBuffer().then(buffer => buffer);
+}
 $('import').addEventListener('click', () => $('pose-file').click());
 $('pose-file').addEventListener('change', async event => {
   const file = event.target.files[0];

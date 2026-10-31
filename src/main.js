@@ -417,7 +417,7 @@ function exportCamera(option, close = false) {
   camera.zoom = close ? option.zoom : 1; camera.updateProjectionMatrix();
   return camera;
 }
-function updateReferencePreview(option, canvas) {
+function updateReferencePreview(option, canvas, close = option.close) {
   if (!referenceRenderer) {
     referenceRenderer = new THREE.WebGLRenderer({ canvas: referenceRenderCanvas, antialias: true, preserveDrawingBuffer: true });
     referenceRenderer.setPixelRatio(1);
@@ -428,7 +428,7 @@ function updateReferencePreview(option, canvas) {
   const markers = mannequin.markers.map(marker => marker.visible), helpers = transforms.map(transform => transform.getHelper().visible);
   try {
     mannequin.setMarkersVisible(false); transforms.forEach(transform => { transform.getHelper().visible = false; });
-    referenceRenderer.render(scene, exportCamera(option, option.close));
+    referenceRenderer.render(scene, exportCamera(option, close));
     canvas.getContext('2d').drawImage(referenceRenderCanvas, 0, 0, canvas.width, canvas.height);
   } finally {
     mannequin.markers.forEach((marker, index) => { marker.visible = markers[index]; });
@@ -448,7 +448,7 @@ $('download-references').addEventListener('click', async () => {
     const files = [];
     const include = async (option, close = false) => {
       const canvas = document.createElement('canvas'); canvas.width = 1200; canvas.height = 1600;
-      updateReferencePreview(option, canvas);
+      updateReferencePreview(option, canvas, close);
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
       if (blob) files.push({ name: `${option.view.name.toLowerCase()}${close ? '-closeup' : ''}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
     };
@@ -457,7 +457,10 @@ $('download-references').addEventListener('click', async () => {
     const contactContext = contact.getContext('2d'); contactContext.fillStyle = '#f7faf7'; contactContext.fillRect(0, 0, contact.width, contact.height);
     for (const [index, file] of files.filter(file => file.name.endsWith('.png')).entries()) {
       const bitmap = await createImageBitmap(new Blob([file.data], { type: 'image/png' })); const x = (index % 2) * 800, y = Math.floor(index / 2) * 540;
-      contactContext.drawImage(bitmap, x + 20, y + 48, 760, 470); contactContext.fillStyle = '#243735'; contactContext.font = '600 18px Segoe UI, sans-serif'; contactContext.fillText(file.name, x + 20, y + 30); bitmap.close();
+      const scale = Math.min(760 / bitmap.width, 470 / bitmap.height);
+      const width = bitmap.width * scale, height = bitmap.height * scale;
+      contactContext.drawImage(bitmap, x + 20 + (760 - width) / 2, y + 48 + (470 - height) / 2, width, height);
+      contactContext.fillStyle = '#243735'; contactContext.font = '600 18px Segoe UI, sans-serif'; contactContext.fillText(file.name, x + 20, y + 30); bitmap.close();
     }
     const contactBlob = await new Promise(resolve => contact.toBlob(resolve, 'image/png'));
     if (contactBlob) files.push({ name: 'overview.png', data: new Uint8Array(await contactBlob.arrayBuffer()) });

@@ -4,6 +4,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { JOINTS, JOINT_MAP, createPose, limitAngles, validatePose } from './rig.js';
 import { createHistory } from './history.js';
 import { createMannequin } from './mannequin.js';
+import { captureRigTransforms, createCompletePoseExport, THREE_VERSION } from './pose-export.js';
 
 const $ = id => document.getElementById(id);
 const degrees = THREE.MathUtils.radToDeg;
@@ -53,6 +54,7 @@ grid.material.opacity = .28;
 scene.add(grid);
 const mannequin = createMannequin(scene);
 mannequin.sync(pose);
+const restTransforms = captureRigTransforms(mannequin);
 
 const viewDefinitions = [
   { name: 'Front', direction: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0), horizontal: 'x' },
@@ -62,6 +64,8 @@ const viewDefinitions = [
 ];
 const panes = [...viewportGrid.querySelectorAll('.view-pane')];
 const cameras = [], orbits = [], transforms = [];
+const lastVisibleViewports = [];
+const projectionSizes = [];
 for (const [index, definition] of viewDefinitions.entries()) {
   const pane = panes[index];
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, .01, 80);
@@ -283,6 +287,7 @@ function fitCameraToBounds(index, center, size) {
   const width = pane.clientWidth || viewport.clientWidth / 2;
   const height = pane.clientHeight || viewport.clientHeight / 2;
   const aspect = Math.max(.1, width / Math.max(1, height));
+  projectionSizes[index] = { width: aspect * height, height };
   const horizontalSize = index === 1 ? size.x : size[viewDefinitions[index].horizontal];
   const verticalSize = index === 1 ? size.z : size.y;
   const halfHeight = Math.max(verticalSize / 2, horizontalSize / (2 * aspect)) * 1.18;
@@ -345,6 +350,32 @@ $('export').addEventListener('click', () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   status('Pose downloaded · keep the file to reopen it later');
+});
+$('export-complete').addEventListener('click', async () => {
+  try {
+    const files = await Promise.all(['rig.js', 'mannequin.js'].map(async name => {
+      const response = await fetch(`/src/${name}`);
+      if (!response.ok) throw new Error(`Could not read procedural source ${name}`);
+      return { name, source: await response.text() };
+    }));
+    const bounds = viewport.getBoundingClientRect();
+    const data = await createCompletePoseExport({
+      mannequin, pose, restTransforms, activeView, renderer,
+      proceduralSource: { language: 'JavaScript ES modules', files,
+        dependencies: { three: THREE_VERSION },
+        usage: "Save both files in one directory, resolve the 'three' import, then call createMannequin(scene) and sync(createPose()) for rest or sync(exported.pose) for current pose. Exported transforms also include any additional parent/root transforms." },
+      views: cameras.map((camera, index) => {
+        const rect = panes[index].getBoundingClientRect();
+        return { camera, target: orbits[index].target, name: viewDefinitions[index].name,
+          viewport: { x: rect.left - bounds.left, y: bounds.bottom - rect.bottom, width: rect.width, height: rect.height },
+          lastVisibleViewport: lastVisibleViewports[index], projectionSize: projectionSizes[index] };
+      }),
+    });
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], { type: 'application/json' }));
+    const link = document.createElement('a'); link.href = url; link.download = 'pose-export.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status('Complete pose downloaded');
+  } catch (error) { status(`Complete pose export failed: ${error.message}`, 'error'); }
 });
 const referenceDialog = $('reference-dialog');
 const referenceViews = $('reference-views');
@@ -535,6 +566,8 @@ function resize() {
     if (!view.width || !view.height) return;
     const x = view.left - bounds.left, y = bounds.bottom - view.bottom;
     const width = view.width, height = view.height;
+    lastVisibleViewports[index] = { x, y, width, height };
+    projectionSizes[index] = { width, height };
     renderer.setViewport(x, y, width, height);
     renderer.setScissor(x, y, width, height);
     const camera = cameras[index], aspect = Math.max(.1, width / Math.max(1, height));

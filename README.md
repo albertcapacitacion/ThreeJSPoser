@@ -50,6 +50,11 @@ These are approximate, independent angular limits. They **do not guarantee a phy
 
 Pose records contain a version, rig identifier, limits setting and local XYZ rotations in degrees. The rest hierarchy lives in `src/rig.js`; body geometry lives in `src/mannequin.js`. Future rig changes should introduce a new rig identifier or explicit migration.
 
+**Export Complete Pose** downloads `pose-export.json` with rest/current transforms,
+the full hierarchy, primitive geometry, materials, Front/active cameras and the
+procedural JavaScript source. See [the complete export format](POSE-EXPORT.md)
+for reconstruction instructions and visual scope. Existing pose files remain compatible.
+
 ## Compact implementation
 
 - `src/rig.js`: rig definition, joint limits and pose validation, independent of the renderer.

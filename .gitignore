@@ -2,3 +2,4 @@ node_modules/
 work/
 .playwright-cli/
 *.log
+experiences.md

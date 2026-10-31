@@ -13,7 +13,7 @@ Use a saved pose or a screenshot of the mannequin as a visual guide when writing
 
 ## Screenshots
 
-![ThreeJSPoser mannequin and pose controls](screenshots/ui-overview.png)
+![ThreeJSPoser with Front, Top, Left, and Right orthographic views](screenshots/ui-four-views.png)
 
 ![Close view of wrist and hand posing controls](screenshots/ui-hand-controls.png)
 
@@ -23,16 +23,17 @@ Requires Node.js 22 or newer.
 
 1. On first setup, run `npm install` in this folder (the pinned dependency is already installed in this working copy).
 2. Double-click `start.cmd`, or run `npm start`.
-3. Open **http://127.0.0.1:5173** in Chrome. Keep the server terminal open; Ctrl+C stops it.
+3. Open the URL printed by the server in Chrome. Keep the server terminal open; Ctrl+C stops it.
 
-The server listens only on this computer. After setup, the editor works without an internet connection. If port 5173 is busy, use `$env:PORT=5174; npm start` in PowerShell and open the corresponding URL.
+The server listens only on this computer. After setup, the editor works without an internet connection. If port 5173 is busy, the server automatically tries the next available port and prints its URL.
 
 ## Pose controls
 
 - Click a body part or joint marker, or select a joint from the list.
 - Drag the red X, green Y or blue Z rotation ring. Drag inside the orb for free rotation. The camera pauses during a rotation drag.
 - Use the sliders or numeric degree fields for precise local-axis rotation. Locked axes are hidden on the orb and disabled in the inspector.
-- Drag the background to orbit, right-drag to pan, and scroll to zoom.
+- The viewport shows fixed Front, Top, Left, and Right orthographic views. Use the square button on a pane to maximize it, then click again to restore the four-view layout.
+- Right-drag in a view to pan, and scroll to zoom.
 - **F** focuses the selected joint; **Home** frames the entire mannequin. The Hands & fingers section includes a close view and three hand presets.
 - **Ctrl+Z / Ctrl+Shift+Z** undo/redo. Each rotation drag is one undo step. **Esc** cancels an active rotation drag.
 - Reset one joint or the entire pose. Both operations can be undone.
@@ -59,7 +60,7 @@ Pose records contain a version, rig identifier, limits setting and local XYZ rot
 
 ## Tests
 
-After `npm install`, run `npx playwright install chromium` once to install the browser used by the integration tests. Run `npm test` for the unit and browser suites. The browser tests verify WebGL rendering, camera-aligned axis labels, 3D joint rotation, and undo/redo. The test server uses port 4173; set `CI=1` in CI environments to disable reuse of an existing server.
+After `npm install`, run `npx playwright install chromium` once to install the browser used by the integration tests. Run `npm test` for the unit and browser suites. The browser tests verify WebGL rendering, four-view maximize/restore, joint picking and gizmo rotation in each view, and undo/redo. The test server uses port 4173; set `CI=1` in CI environments to disable reuse of an existing server.
 
 Temporary browser files and dependency caches belong in the ignored `work/` folder.
 

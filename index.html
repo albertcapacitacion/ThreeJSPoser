@@ -17,25 +17,14 @@
       <div class="file-actions"><button id="import">Open pose</button><button id="export" class="primary">Save pose <span aria-hidden="true">↗</span></button><input id="pose-file" type="file" accept=".json,application/json" hidden></div>
     </header>
     <section id="viewport" aria-label="3D mannequin viewport">
-      <div class="scene-label"><span class="live-dot"></span> SEGMENTED MANNEQUIN <span class="muted">/ 54 JOINTS</span></div>
       <div class="view-tools"><button id="fit" title="Frame whole mannequin (Home)">Frame body</button><button id="focus" title="Focus selected joint (F)">Focus joint</button></div>
       <div id="boot-message" role="status">Loading local 3D editor…</div>
-      <div class="axis-legend"><span class="x">● X</span><span class="y">● Y</span><span class="z">● Z</span><span>Rotation axes</span></div>
-      <div class="axis-guide" role="img" aria-label="World orientation guide showing the X, Y, and Z axes relative to the camera">
-        <svg viewBox="0 0 100 100" aria-hidden="true">
-          <line id="guide-line-x" class="guide-line guide-x" />
-          <line id="guide-line-y" class="guide-line guide-y" />
-          <line id="guide-line-z" class="guide-line guide-z" />
-          <circle id="guide-negative-x" class="guide-negative guide-x" r="2.5" />
-          <circle id="guide-negative-y" class="guide-negative guide-y" r="2.5" />
-          <circle id="guide-negative-z" class="guide-negative guide-z" r="2.5" />
-          <g id="guide-mark-x" class="guide-mark guide-x"><circle r="5" /><text>X</text></g>
-          <g id="guide-mark-y" class="guide-mark guide-y"><circle r="5" /><text>Y</text></g>
-          <g id="guide-mark-z" class="guide-mark guide-z"><circle r="5" /><text>Z</text></g>
-          <circle class="guide-center" cx="50" cy="50" r="3" />
-        </svg>
+      <div id="viewport-grid" aria-label="Four standard orthographic views">
+        <div class="view-pane" data-view="0" aria-label="Front view"><span class="pane-title">Front</span><button class="maximize-view" data-maximize title="Maximize view" aria-label="Maximize front view">□</button></div>
+        <div class="view-pane" data-view="1" aria-label="Top view"><span class="pane-title">Top</span><button class="maximize-view" data-maximize title="Maximize view" aria-label="Maximize top view">□</button></div>
+        <div class="view-pane" data-view="2" aria-label="Left view"><span class="pane-title">Left</span><button class="maximize-view" data-maximize title="Maximize view" aria-label="Maximize left view">□</button></div>
+        <div class="view-pane" data-view="3" aria-label="Right view"><span class="pane-title">Right</span><button class="maximize-view" data-maximize title="Maximize view" aria-label="Maximize right view">□</button></div>
       </div>
-      <div class="viewport-hint">Click a joint or body part to pose it <span>·</span> Drag background to orbit <span>·</span> Scroll to zoom</div>
     </section>
     <aside class="inspector" aria-label="Joint controls">
       <div class="section-heading"><span>POSE CONTROLS</span><span class="version">v0.1</span></div>

@@ -6,8 +6,9 @@ import { createHistory } from './history.js';
 import { createMannequin } from './mannequin.js';
 
 const $ = id => document.getElementById(id);
-const radians = THREE.MathUtils.degToRad, degrees = THREE.MathUtils.radToDeg;
+const degrees = THREE.MathUtils.radToDeg;
 const viewport = $('viewport');
+const viewportGrid = $('viewport-grid');
 let pose = createPose(), selected = 'leftShoulder';
 const history = createHistory(pose);
 let renderer;
@@ -28,14 +29,6 @@ viewport.append(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xe9eee8);
 scene.fog = new THREE.Fog(0xe9eee8, 7, 18);
-const camera = new THREE.PerspectiveCamera(36, 1, .01, 80);
-camera.position.set(2.25, 1.55, 4.3);
-const orbit = new OrbitControls(camera, renderer.domElement);
-orbit.target.set(0, .99, 0);
-orbit.minDistance = .12;
-orbit.maxDistance = 12;
-orbit.maxPolarAngle = Math.PI * .94;
-orbit.enableDamping = false;
 const hemi = new THREE.HemisphereLight(0xffffff, 0xa5b9a2, 2.3);
 scene.add(hemi);
 const key = new THREE.DirectionalLight(0xfff5df, 3.2);
@@ -61,13 +54,40 @@ scene.add(grid);
 const mannequin = createMannequin(scene);
 mannequin.sync(pose);
 
-const transform = new TransformControls(camera, renderer.domElement);
-transform.setMode('rotate');
-transform.setSpace('local');
-transform.setSize(.86);
-transform.setColors(0xee5d60, 0x46af77, 0x508bff, 0xffc55b);
-transform.showE = false;
-scene.add(transform.getHelper());
+const viewDefinitions = [
+  { name: 'Front', direction: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0), horizontal: 'x' },
+  { name: 'Top', direction: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, -1), horizontal: 'x' },
+  { name: 'Left', direction: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3(0, 1, 0), horizontal: 'z' },
+  { name: 'Right', direction: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 1, 0), horizontal: 'z' },
+];
+const panes = [...viewportGrid.querySelectorAll('.view-pane')];
+const cameras = [], orbits = [], transforms = [];
+for (const [index, definition] of viewDefinitions.entries()) {
+  const pane = panes[index];
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, .01, 80);
+  camera.up.copy(definition.up);
+  camera.position.copy(definition.direction).multiplyScalar(5).add(new THREE.Vector3(0, .99, 0));
+  camera.lookAt(0, .99, 0);
+  cameras.push(camera);
+
+  const orbit = new OrbitControls(camera, pane);
+  orbit.target.set(0, .99, 0);
+  orbit.enableRotate = false;
+  orbit.enableDamping = false;
+  orbit.minZoom = .5;
+  orbit.maxZoom = 12;
+  orbits.push(orbit);
+
+  const transform = new TransformControls(camera, pane);
+  transform.setMode('rotate');
+  transform.setSpace('local');
+  transform.setSize(.86);
+  transform.setColors(0xee5d60, 0x46af77, 0x508bff, 0xffc55b);
+  transform.showE = false;
+  scene.add(transform.getHelper());
+  transforms.push(transform);
+}
+let activeView = 0, activeTransform = transforms[0];
 // A subtle sphere makes the otherwise invisible free-rotation area discoverable.
 const orb = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 28), new THREE.MeshBasicMaterial({
   color: 0x6c9d91, transparent: true, opacity: .045, depthWrite: false, depthTest: false,
@@ -131,19 +151,21 @@ function syncControls() {
   $('undo').disabled = !history.canUndo;
   $('redo').disabled = !history.canRedo;
   const limits = JOINT_MAP[selected].limits;
-  transform.showX = !pose.limits || limits[0][0] !== limits[0][1];
-  transform.showY = !pose.limits || limits[1][0] !== limits[1][1];
-  transform.showZ = !pose.limits || limits[2][0] !== limits[2][1];
+  for (const transform of transforms) {
+    transform.showX = !pose.limits || limits[0][0] !== limits[0][1];
+    transform.showY = !pose.limits || limits[1][0] !== limits[1][1];
+    transform.showZ = !pose.limits || limits[2][0] !== limits[2][1];
+  }
   // A hinge still accepts free dragging, but the resulting pose is constrained.
   syncAngles();
 }
 function commit() { history.push(pose); syncControls(); }
 function selectJoint(id) {
-  if (!JOINT_MAP[id] || transform.dragging) return;
+  if (!JOINT_MAP[id] || transforms.some(transform => transform.dragging)) return;
   selected = id;
   selector.value = id;
   mannequin.highlight(id);
-  transform.attach(mannequin.bones[id]);
+  for (const transform of transforms) transform.attach(mannequin.bones[id]);
   $('joint-region').textContent = JOINT_MAP[id].group;
   $('joint-description').textContent = /Knee|Elbow|Toes|[234]$/.test(id)
     ? pose.limits
@@ -156,52 +178,59 @@ function selectJoint(id) {
 selector.addEventListener('change', () => selectJoint(selector.value));
 
 let dragStart = null, cancelling = false;
-transform.addEventListener('dragging-changed', event => { orbit.enabled = !event.value; });
-transform.addEventListener('mouseDown', () => { dragStart = structuredClone(pose); });
-transform.addEventListener('objectChange', () => {
-  if (cancelling) return;
-  const rotation = mannequin.bones[selected].rotation;
-  const raw = [rotation.x, rotation.y, rotation.z].map(degrees);
-  const constrained = limitAngles(selected, raw, pose.limits);
-  const limited = raw.some((n, i) => Math.abs(n - constrained[i]) > .01);
-  pose.rotations[selected] = constrained;
-  mannequin.sync(pose);
-  syncAngles();
-  status(limited ? 'Joint limit reached' : `Rotating ${JOINT_MAP[selected].label.toLowerCase()}`, limited ? 'limited' : '');
-});
-transform.addEventListener('mouseUp', () => {
-  if (dragStart && !cancelling) commit();
-  dragStart = null;
+transforms.forEach((transform, index) => {
+  transform.addEventListener('dragging-changed', event => { orbits[index].enabled = !event.value; });
+  transform.addEventListener('mouseDown', () => { activeView = index; activeTransform = transform; dragStart = structuredClone(pose); });
+  transform.addEventListener('objectChange', () => {
+    if (cancelling) return;
+    const rotation = mannequin.bones[selected].rotation;
+    const raw = [rotation.x, rotation.y, rotation.z].map(degrees);
+    const constrained = limitAngles(selected, raw, pose.limits);
+    const limited = raw.some((n, i) => Math.abs(n - constrained[i]) > .01);
+    pose.rotations[selected] = constrained;
+    mannequin.sync(pose);
+    syncAngles();
+    status(limited ? 'Joint limit reached' : `Rotating ${JOINT_MAP[selected].label.toLowerCase()}`, limited ? 'limited' : '');
+  });
+  transform.addEventListener('mouseUp', () => {
+    if (dragStart && !cancelling) commit();
+    dragStart = null;
+  });
 });
 
 // Give visible markers priority over the orb, so nearby joints stay selectable.
 const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2();
-function hits(event, objects) {
-  const rect = renderer.domElement.getBoundingClientRect();
+function hits(event, objects, pane, camera) {
+  const rect = pane.getBoundingClientRect();
   pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
   return raycaster.intersectObjects(objects, false).filter(hit => hit.object.visible);
 }
-let clickStart = null;
-renderer.domElement.addEventListener('pointerdown', event => {
-  if (event.button !== 0) return;
-  const marker = hits(event, mannequin.markers)[0];
-  const bodyPart = marker || hits(event, mannequin.pickables)[0];
-  if (bodyPart && bodyPart.object.userData.jointId !== selected && !transform.dragging) {
-    selectJoint(bodyPart.object.userData.jointId);
-    event.stopImmediatePropagation();
-    clickStart = null;
-    return;
-  }
-  clickStart = { x: event.clientX, y: event.clientY, gizmo: transform.axis !== null };
-}, true);
-renderer.domElement.addEventListener('pointerup', event => {
-  if (!clickStart || event.button !== 0) return;
-  const start = clickStart;
-  clickStart = null;
-  if (start.gizmo || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) return;
-  const hit = hits(event, mannequin.pickables)[0];
-  if (hit) selectJoint(hit.object.userData.jointId);
+const clickStarts = new Map();
+panes.forEach((pane, index) => {
+  pane.addEventListener('pointerdown', event => {
+    activeView = index;
+    activeTransform = transforms[index];
+    if (event.target.closest('button')) { event.stopPropagation(); return; }
+    if (event.button !== 0) return;
+    const marker = hits(event, mannequin.markers, pane, cameras[index])[0];
+    const bodyPart = marker || hits(event, mannequin.pickables, pane, cameras[index])[0];
+    if (bodyPart && bodyPart.object.userData.jointId !== selected && !transforms.some(transform => transform.dragging)) {
+      selectJoint(bodyPart.object.userData.jointId);
+      event.stopImmediatePropagation();
+      clickStarts.delete(index);
+      return;
+    }
+    clickStarts.set(index, { x: event.clientX, y: event.clientY, gizmo: transforms[index].axis !== null });
+  }, true);
+  pane.addEventListener('pointerup', event => {
+    const start = clickStarts.get(index);
+    clickStarts.delete(index);
+    if (!start || event.button !== 0) return;
+    if (start.gizmo || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) return;
+    const hit = hits(event, mannequin.pickables, pane, cameras[index])[0];
+    if (hit) selectJoint(hit.object.userData.jointId);
+  });
 });
 
 function restore(value, message) {
@@ -239,13 +268,12 @@ $('show-joints').addEventListener('change', () => mannequin.setMarkersVisible($(
 function focusJoint(id = selected) {
   const target = mannequin.bones[id].getWorldPosition(new THREE.Vector3());
   const isHand = /Wrist|Thumb|Index|Middle|Ring|Little/.test(id);
-  const distance = isHand ? .78 : .95;
-  const direction = isHand
-    ? new THREE.Vector3(id.startsWith('left') ? .48 : -.48, .16, 1).normalize()
-    : camera.position.clone().sub(orbit.target).normalize();
+  const camera = cameras[activeView], orbit = orbits[activeView];
+  const distance = 5;
+  const direction = viewDefinitions[activeView].direction;
   orbit.target.copy(target);
   camera.position.copy(target).addScaledVector(direction, distance);
-  camera.near = .005;
+  camera.zoom = isHand ? 5 : 2.2;
   camera.updateProjectionMatrix();
   orbit.update();
   status(`Focused ${JOINT_MAP[id].label.toLowerCase()}`);
@@ -254,17 +282,42 @@ function fitBody() {
   const box = new THREE.Box3().setFromObject(mannequin.root);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  const vertical = size.y / (2 * Math.tan(radians(camera.fov / 2)));
-  const horizontal = Math.max(size.x, size.z) / (2 * Math.tan(radians(camera.fov / 2)) * camera.aspect);
-  const distance = Math.max(vertical, horizontal) * 1.4;
-  orbit.target.copy(center);
-  camera.position.copy(center).add(new THREE.Vector3(.3, .13, 1).normalize().multiplyScalar(distance));
-  orbit.update();
+  cameras.forEach((camera, index) => {
+    const pane = panes[index];
+    const width = pane.clientWidth || viewport.clientWidth / 2;
+    const height = pane.clientHeight || viewport.clientHeight / 2;
+    const aspect = Math.max(.1, width / Math.max(1, height));
+    const horizontalSize = index === 1 ? size.x : size[viewDefinitions[index].horizontal];
+    const verticalSize = index === 1 ? size.z : size.y;
+    const halfHeight = Math.max(verticalSize / 2, horizontalSize / (2 * aspect)) * 1.18;
+    camera.left = -halfHeight * aspect;
+    camera.right = halfHeight * aspect;
+    camera.top = halfHeight;
+    camera.bottom = -halfHeight;
+    camera.zoom = 1;
+    camera.position.copy(center).addScaledVector(viewDefinitions[index].direction, 5);
+    camera.lookAt(center);
+    camera.updateProjectionMatrix();
+    orbits[index].target.copy(center);
+    orbits[index].update();
+  });
   status('Whole mannequin framed');
 }
 $('focus').addEventListener('click', () => focusJoint());
 $('fit').addEventListener('click', fitBody);
 $('focus-hand').addEventListener('click', () => { const id = `${$('hand-side').value}Wrist`; selectJoint(id); focusJoint(id); });
+document.querySelectorAll('[data-maximize]').forEach(button => button.addEventListener('click', () => {
+  const index = Number(button.closest('.view-pane').dataset.view);
+  const maximized = viewportGrid.dataset.maximized === String(index);
+  viewportGrid.dataset.maximized = maximized ? '' : String(index);
+  document.querySelectorAll('[data-maximize]').forEach((control, controlIndex) => {
+    const isMaximized = !maximized && controlIndex === index;
+    control.textContent = isMaximized ? '↙' : '□';
+    control.title = isMaximized ? 'Restore four views' : 'Maximize view';
+    control.setAttribute('aria-label', control.title);
+  });
+  requestAnimationFrame(resize);
+}));
 for (const button of document.querySelectorAll('[data-hand]')) button.addEventListener('click', () => {
   const side = $('hand-side').value;
   const preset = button.dataset.hand;
@@ -302,15 +355,15 @@ $('pose-file').addEventListener('change', async event => {
 });
 
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && transform.dragging && dragStart) {
+  if (event.key === 'Escape' && activeTransform.dragging && dragStart) {
     cancelling = true;
-    transform.reset();
+    activeTransform.reset();
     pose = dragStart;
     dragStart = null;
     mannequin.sync(pose);
-    transform.dragging = false;
-    transform.axis = null;
-    orbit.enabled = true;
+    activeTransform.dragging = false;
+    activeTransform.axis = null;
+    orbits[activeView].enabled = true;
     cancelling = false;
     syncControls();
     status('Rotation cancelled');
@@ -320,13 +373,25 @@ window.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
     event.preventDefault();
     restore(event.shiftKey ? history.redo() : history.undo(), event.shiftKey ? 'Redid pose change' : 'Undid pose change');
-  } else if (!transform.dragging && event.key.toLowerCase() === 'f') focusJoint();
-  else if (!transform.dragging && event.key === 'Home') { event.preventDefault(); fitBody(); }
+  } else if (!transforms.some(transform => transform.dragging) && event.key.toLowerCase() === 'f') focusJoint();
+  else if (!transforms.some(transform => transform.dragging) && event.key === 'Home') { event.preventDefault(); fitBody(); }
 });
 function resize() {
-  camera.aspect = viewport.clientWidth / viewport.clientHeight;
-  camera.updateProjectionMatrix();
   renderer.setSize(viewport.clientWidth, viewport.clientHeight);
+  renderer.setScissorTest(true);
+  panes.forEach((pane, index) => {
+    const view = pane.getBoundingClientRect(), bounds = viewport.getBoundingClientRect();
+    if (!view.width || !view.height) return;
+    const x = view.left - bounds.left, y = bounds.bottom - view.bottom;
+    const width = view.width, height = view.height;
+    renderer.setViewport(x, y, width, height);
+    renderer.setScissor(x, y, width, height);
+    const camera = cameras[index], aspect = Math.max(.1, width / Math.max(1, height));
+    const halfHeight = (camera.top - camera.bottom) / 2;
+    camera.left = -halfHeight * aspect;
+    camera.right = halfHeight * aspect;
+    camera.updateProjectionMatrix();
+  });
 }
 new ResizeObserver(resize).observe(viewport);
 renderer.domElement.addEventListener('webglcontextlost', event => {
@@ -339,49 +404,19 @@ resize();
 fitBody();
 $('boot-message').remove();
 status('Ready · select a joint to begin');
-const guideInverseCamera = new THREE.Quaternion();
-const guideVector = new THREE.Vector3();
-const guideAxes = [
-  ['x', new THREE.Vector3(1, 0, 0)],
-  ['y', new THREE.Vector3(0, 1, 0)],
-  ['z', new THREE.Vector3(0, 0, 1)],
-].map(([name, direction]) => ({
-  direction,
-  line: $(`guide-line-${name}`),
-  positive: $(`guide-mark-${name}`),
-  negative: $(`guide-negative-${name}`),
-}));
-function syncAxisGuide() {
-  guideInverseCamera.copy(camera.quaternion).invert();
-  for (const axis of guideAxes) {
-    guideVector.copy(axis.direction).applyQuaternion(guideInverseCamera);
-    const x = 50 + guideVector.x * 29;
-    const y = 50 - guideVector.y * 29;
-    const nx = 100 - x;
-    const ny = 100 - y;
-    axis.line.setAttribute('x1', nx);
-    axis.line.setAttribute('y1', ny);
-    axis.line.setAttribute('x2', x);
-    axis.line.setAttribute('y2', y);
-    axis.positive.setAttribute('transform', `translate(${x} ${y})`);
-    axis.negative.setAttribute('cx', nx);
-    axis.negative.setAttribute('cy', ny);
-    const text = axis.positive.querySelector('text');
-    text.setAttribute('x', guideVector.x < -.15 ? -8 : 8);
-    text.setAttribute('y', guideVector.y > .15 ? -8 : 10);
-    text.setAttribute('text-anchor', guideVector.x < -.15 ? 'end' : 'start');
-    const opacity = .45 + Math.abs(guideVector.z) * .55;
-    axis.line.style.opacity = opacity;
-    axis.positive.style.opacity = opacity;
-    axis.negative.style.opacity = opacity;
-  }
-}
 renderer.setAnimationLoop(() => {
   const worldPosition = mannequin.bones[selected].getWorldPosition(new THREE.Vector3());
   orb.position.copy(worldPosition);
-  // Match the gizmo's world-space radius, independent of camera zoom.
-  const factor = camera.position.distanceTo(worldPosition) * Math.min(1.9 * Math.tan(Math.PI * camera.fov / 360) / camera.zoom, 7);
-  orb.scale.setScalar(factor * transform.size / 7 * .5);
-  syncAxisGuide();
-  renderer.render(scene, camera);
+  panes.forEach((pane, index) => {
+    const view = pane.getBoundingClientRect(), bounds = viewport.getBoundingClientRect();
+    if (!view.width || !view.height) return;
+    const x = view.left - bounds.left, y = bounds.bottom - view.bottom;
+    renderer.setViewport(x, y, view.width, view.height);
+    renderer.setScissor(x, y, view.width, view.height);
+    const transform = transforms[index], camera = cameras[index];
+    for (let i = 0; i < transforms.length; i++) transforms[i].getHelper().visible = i === index;
+    const worldHeight = (camera.top - camera.bottom) / camera.zoom;
+    orb.scale.setScalar(worldHeight * .045 * transform.size);
+    renderer.render(scene, camera);
+  });
 });

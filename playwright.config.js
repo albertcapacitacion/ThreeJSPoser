@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: './tests',
   testMatch: '**/*.browser.spec.js',
   fullyParallel: true,
+  workers: 2,
   reporter: 'list',
   outputDir: 'work/playwright-results',
   use: {

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FINGER_LENGTHS } from './rig.js';
+import { HEAD_ANCHORS } from './mannequin.js';
 
 // COCO-18 ordering and ControlNet OpenPose palette/topology, not rig traversal order.
 // Reference: Mikubill/sd-webui-controlnet/annotator/openpose/util.py.
@@ -17,7 +18,7 @@ const pixels = c => c.getContext('2d', { willReadFrequently: true }).getImageDat
 function landmarks(mannequin) {
   const point = (name, bone = name, offset = [0, 0, 0]) => ({ name,
     world: mannequin.bones[bone].localToWorld(new THREE.Vector3(...offset)).toArray() });
-  const body = BODY.map(name => name === 'nose' ? point(name, 'head', [0, .044, .111])
+  const body = BODY.map(name => HEAD_ANCHORS[name] ? point(name, 'head', HEAD_ANCHORS[name])
     : mannequin.bones[name] ? point(name) : null);
   const hands = ['left', 'right'].map(side => {
     const points = [point(`${side}Wrist`)];
@@ -139,7 +140,7 @@ export function setupControlExport({ mannequin, getPose, createZip, status }) {
     const poseContext = poseCanvas.getContext('2d'); poseContext.fillStyle = '#000'; poseContext.fillRect(0, 0, width, height);
     drawSkeleton(poseContext, body, hands, width, height); drawSkeleton(context, body, hands, width, height);
     const cropped = [...body, ...hands.flat()].filter(point => point && !point.inFrame).map(point => point.name);
-    const warnings = ['Eyes, ears and facial expression landmarks are omitted; nose is an approximate surface landmark.',
+    const warnings = ['Nose, eyes and ears are approximate head-surface anchors; facial expression landmarks are omitted.',
       'Hidden joints are retained in the skeleton. Occlusion and pose fidelity require visual review.'];
     if (cropped.length) warnings.push(`Outside frame or clipping range (${cropped.length}): ${cropped.join(', ')}. Connections to these landmarks are omitted.`);
     // Check actual mesh vertices, not just the landmarks, for cropped hands/head/surfaces.
@@ -244,7 +245,7 @@ export function setupControlExport({ mannequin, getPose, createZip, status }) {
       const report = { ...last, checks, generatedImageFidelity: 'Not evaluated; manual overlay and overlap review required.' };
       const textFile = (name, value) => ({ name, data: new TextEncoder().encode(value) });
       files.push(textFile('validation.json', JSON.stringify(report, null, 2)), textFile('pose.json', JSON.stringify(snapshot, null, 2)),
-        textFile('README.txt', 'ThreeJSPoser control maps prototype\n\nUse openpose.png with an SD 1.5 OpenPose ControlNet and depth.png with an SD 1.5 depth ControlNet (control_v11f1p_sd15_depth). These maps are already prepared: bypass pose/depth preprocessors.\nKeep the exported aspect ratio and identical framing for both maps.\nreference.png and overlay.png are inspection images, not control maps.\nvalidation.json records the perspective camera, pixel-space landmarks, depth convention and decoded-PNG checks. pose.json is the unchanged editor pose snapshot.\n\nEyes/ears/face expressions are not supplied. The nose is a proxy; hand tips derive from finger geometry. Hidden joints are retained. Check overlap manually. Depth contains segmented mannequin proportions.\nPassing checks does not establish 90% generated-image fidelity or replace testing in ComfyUI/Forge.\n'));
+        textFile('README.txt', 'ThreeJSPoser control maps prototype\n\nUse openpose.png with an SD 1.5 OpenPose ControlNet and depth.png with an SD 1.5 depth ControlNet (control_v11f1p_sd15_depth). These maps are already prepared: bypass pose/depth preprocessors.\nKeep the exported aspect ratio and identical framing for both maps.\nreference.png and overlay.png are inspection images, not control maps.\nvalidation.json records the perspective camera, pixel-space landmarks, depth convention and decoded-PNG checks. pose.json is the unchanged editor pose snapshot.\n\nNose, eyes and ears are approximate head-surface anchors that follow head rotation. Face expressions are not supplied; hand tips derive from finger geometry. Hidden joints are retained. Check overlap manually. Depth contains segmented mannequin proportions.\nPassing checks does not establish 90% generated-image fidelity or replace testing in ComfyUI/Forge.\n'));
       validated = files.map(({ name, data }) => ({ name, data }));
       $('control-validation').textContent = `PNG checks passed · ${samples.length} surface samples · max depth error ${maxError}/255. Review warnings before use.`;
     } catch (error) { $('control-validation').textContent = `Validation failed: ${error.message}`; }

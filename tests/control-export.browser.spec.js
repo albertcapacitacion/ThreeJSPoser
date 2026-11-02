@@ -34,6 +34,20 @@ async function validate(page) {
   await expect(page.locator('#download-control-export')).toBeEnabled();
 }
 
+// Independent pinhole projection of the coordinates in the downloaded report.
+function checkProjection(report) {
+  const m = report.camera.worldMatrix, position = report.camera.position;
+  const scale = 1 / Math.tan(report.camera.fov * Math.PI / 360);
+  for (const point of report.body.filter(Boolean)) {
+    const [x, y, z] = point.world.map((v, i) => v - position[i]);
+    const vx = x * m[0] + y * m[1] + z * m[2];
+    const vy = x * m[4] + y * m[5] + z * m[6];
+    const vz = x * m[8] + y * m[9] + z * m[10];
+    expect(point.x).toBeCloseTo(report.width / 2 * (1 + vx * scale / (-vz * report.camera.aspect)), 7);
+    expect(point.y).toBeCloseTo(report.height / 2 * (1 - vy * scale / -vz), 7);
+  }
+}
+
 // Decode the actual downloaded PNGs, not application internals or regenerated maps.
 async function inspectFiles(page, files, report, probes = []) {
   return page.evaluate(async ({ images, report, probes }) => {
@@ -73,7 +87,10 @@ test('downloads aligned opaque maps, decoded-pixel validation, and unchanged pos
   expect(Object.keys(files)).toEqual(['openpose.png', 'depth.png', 'reference.png', 'overlay.png', 'validation.json', 'pose.json', 'README.txt']);
   const report = JSON.parse(files['validation.json']);
   expect(report.cropped).toEqual([]); expect(report.surfaceClipped).toBe(false);
-  expect(report.body).toHaveLength(18); expect(report.body.slice(14)).toEqual([null, null, null, null]);
+  expect(report.body).toHaveLength(18);
+  expect(report.body.slice(14).map(p => p.name)).toEqual(['rightEye', 'leftEye', 'rightEar', 'leftEar']);
+  expect(report.warnings).toContain('Nose, eyes and ears are approximate head-surface anchors; facial expression landmarks are omitted.');
+  expect(files['README.txt'].toString()).toContain('anchors that follow head rotation');
   expect(report.hands).toEqual([]);
   expect(report.checks.surfaceDepth.count).toBeGreaterThan(20);
   expect(report.checks.surfaceDepth.maxError).toBeLessThanOrEqual(3);
@@ -87,23 +104,85 @@ test('downloads aligned opaque maps, decoded-pixel validation, and unchanged pos
   expect(decoded['openpose.png'].joints[2]).toEqual([255, 170, 0, 255]); // Anatomical right shoulder.
   expect(decoded['openpose.png'].joints[5]).toEqual([85, 255, 0, 255]); // Anatomical left shoulder.
   expect(decoded['openpose.png'].joints[5]).toEqual(decoded['overlay.png'].joints[5]);
+  const faceColors = [[255, 0, 0, 255], [170, 0, 255, 255], [255, 0, 255, 255], [255, 0, 170, 255], [255, 0, 85, 255]];
+  [0, 14, 15, 16, 17].forEach((index, i) => {
+    expect(decoded['openpose.png'].joints[index]).toEqual(faceColors[i]);
+    expect(decoded['overlay.png'].joints[index]).toEqual(faceColors[i]);
+  });
   report.checks.surfaceDepth.samples.forEach((sample, i) => expect(decoded['depth.png'].surfaceSamples[i]).toBe(sample.actual));
-  // Independent pinhole projection, no application projection helper / THREE.Vector3.project.
-  const m = report.camera.worldMatrix, [cx, cy, cz] = report.camera.position;
-  for (const point of report.body.filter(Boolean)) {
-    const [x, y, z] = point.world.map((v, i) => v - [cx, cy, cz][i]);
-    const vx = x * m[0] + y * m[1] + z * m[2];
-    const vy = x * m[4] + y * m[5] + z * m[6];
-    const vz = x * m[8] + y * m[9] + z * m[10];
-    const scale = 1 / Math.tan(report.camera.fov * Math.PI / 360);
-    expect(point.x).toBeCloseTo(256 * (1 + vx * scale / (-vz * report.camera.aspect)), 7);
-    expect(point.y).toBeCloseTo(384 * (1 - vy * scale / -vz), 7);
-  }
+  checkProjection(report);
   await page.screenshot({ path: testInfo.outputPath('control-export.png') });
   await page.getByRole('button', { name: 'Close control maps', exact: true }).click();
   expect(JSON.parse(await download(page, '#export'))).toEqual(before);
   expect(errors).toEqual([]);
 });
+
+for (const [name, head, neck = [0, 0, 0]] of [
+  ['turn left', [0, 35, 0]], ['turn right', [0, -35, 0]],
+  ['nod down', [25, 0, 0]], ['nod up', [-20, 0, 0]],
+  ['tilt', [0, 0, 20]], ['profile', [0, 90, 0]], ['rear', [0, 180, 0]],
+  ['combined head and neck', [15, -30, -15], [-10, 25, 10]],
+]) {
+  test(`head anchors follow ${name} in downloaded maps`, async ({ page }, testInfo) => {
+    // Profile/rear deliberately exercise the existing unrestricted posing mode.
+    if (name === 'profile' || name === 'rear') await page.locator('#limits').uncheck();
+    for (const [joint, angles] of [['neck', neck], ['head', head]]) {
+      await page.locator('#joint-select').selectOption(joint);
+      for (const [i, axis] of ['X', 'Y', 'Z'].entries()) {
+        await page.locator(`#angle-${axis}`).fill(String(angles[i]));
+        await page.locator(`#angle-${axis}`).press('Tab');
+      }
+    }
+    const complete = JSON.parse(await download(page, '#export-complete'));
+    expect(complete.pose.rotations.head).toEqual(head);
+    expect(complete.pose.rotations.neck).toEqual(neck);
+    const headNode = complete.rig.joints.find(joint => joint.name === 'head').node;
+    const m = complete.pose.transforms[headNode].world.matrix;
+    await openPrototype(page); await page.locator('#control-hands').uncheck(); await validate(page);
+    const files = unzip(await download(page, '#download-control-export'));
+    const report = JSON.parse(files['validation.json']);
+    const anchors = [report.body[0], ...report.body.slice(14)];
+    // Fixed anatomical reference values, independent of the production anchor table.
+    const offsets = [[0, .044, .111], [-.034, .084, .087], [.034, .084, .087], [-.09, .064, 0], [.09, .064, 0]];
+    for (const [i, point] of anchors.entries()) {
+      const [x, y, z] = offsets[i];
+      for (let axis = 0; axis < 3; axis++) {
+        expect(point.world[axis]).toBeCloseTo(m[axis] * x + m[4 + axis] * y + m[8 + axis] * z + m[12 + axis], 10);
+      }
+      expect(point.inFrame).toBe(true);
+    }
+    checkProjection(report);
+    const [nose, rightEye, leftEye, rightEar, leftEar] = anchors;
+    if (name === 'turn left' || name === 'turn right') {
+      const sign = name === 'turn left' ? 1 : -1;
+      expect(sign * (nose.world[0] - m[12])).toBeGreaterThan(0);
+      expect(sign * (leftEye.distance - rightEye.distance)).toBeGreaterThan(0);
+      expect(rightEar.x).toBeLessThan(leftEar.x);
+    }
+    if (name === 'profile') {
+      expect(Math.abs(rightEye.x - leftEye.x)).toBeLessThan(1);
+      expect(nose.x).toBeGreaterThan(rightEye.x);
+      expect(leftEye.distance).toBeGreaterThan(rightEye.distance);
+    }
+    if (name === 'rear') {
+      expect(rightEar.x).toBeGreaterThan(leftEar.x);
+      expect(nose.distance).toBeGreaterThan(leftEar.distance);
+    }
+    if (name === 'tilt') expect(leftEye.y).toBeLessThan(rightEye.y);
+    expect(report.cropped).toEqual([]); expect(report.surfaceClipped).toBe(false);
+    expect(JSON.parse(files['pose.json'])).toEqual({
+      version: complete.pose.version, rig: complete.pose.rig, limits: complete.pose.limits, rotations: complete.pose.rotations,
+    });
+    const decoded = await inspectFiles(page, files, report);
+    // Last body landmark remains visible even when other face dots overlap at profile/rear.
+    expect(decoded['openpose.png'].joints[17]).toEqual([255, 0, 85, 255]);
+    expect(decoded['overlay.png'].joints[17]).toEqual([255, 0, 85, 255]);
+    await testInfo.attach(`${name}-overlay`, { body: files['overlay.png'], contentType: 'image/png' });
+    await testInfo.attach(`${name}-openpose`, { body: files['openpose.png'], contentType: 'image/png' });
+    await page.locator('#close-control-export').click();
+    expect(JSON.parse(await download(page, '#export'))).toEqual(JSON.parse(files['pose.json']));
+  });
+}
 
 test('reaching arm has nearer depth, explicit fingertips, and correct perspective enlargement', async ({ page }) => {
   await page.getByLabel('Selected joint', { exact: true }).selectOption('leftShoulder');

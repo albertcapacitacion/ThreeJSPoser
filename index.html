@@ -66,7 +66,7 @@
         <figure><figcaption>OpenPose · black background</figcaption><canvas id="control-pose" aria-label="OpenPose preview"></canvas></figure>
         <figure><figcaption>Depth · nearer is brighter</figcaption><canvas id="control-depth" aria-label="Depth preview"></canvas></figure>
       </div>
-      <p class="small-note">Prototype limits: nose is a geometry proxy; eyes, ears and facial expressions are unsupported. Projected hidden joints are retained; inspect overlaps manually. Segmented mannequin proportions are present in depth.</p>
+      <p class="small-note">Prototype limits: nose, eyes and ears are approximate head-surface anchors; facial expressions are unsupported. Projected hidden joints are retained; inspect overlaps manually. Segmented mannequin proportions are present in depth.</p>
       <p id="control-validation" role="status" aria-live="polite">Not validated.</p>
       <ul id="control-warnings"></ul>
       <p class="small-note">Checks verify exported inputs, not generated-image fidelity. A 90% pose match still needs evaluation in your generation workflow.</p>

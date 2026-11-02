@@ -106,8 +106,8 @@ and aspect ratio in the workflow. See the [ControlNet depth model guidance](http
 and [OpenPose rendering convention](https://github.com/Mikubill/sd-webui-controlnet/blob/main/annotator/openpose/util.py).
 
 This prototype maps body landmarks and optional 21-point hands (including derived
-fingertip endpoints). The nose is an approximate landmark based on the mannequin
-geometry; eyes, ears and facial expressions are omitted. Hidden joints remain in
+fingertip endpoints). Nose, eye and ear anchors approximate the mannequin's head
+surface and follow its rotation; facial expressions are omitted. Hidden joints remain in
 the projected skeleton. Depth includes the mannequin's segmented shape and
 proportions. Inspect occlusion and alignment manually. Passing export checks does
 not establish generated-image fidelity or guarantee a 90% pose match: that still

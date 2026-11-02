@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import { JOINTS, FINGER_LENGTHS } from './rig.js';
 
+// Approximate surface anchors in head-local metres; anatomical left is +X.
+// These follow the head transform without adding geometry or editable joints.
+export const HEAD_ANCHORS = {
+  nose: [0, .044, .111],
+  rightEye: [-.034, .084, .087], leftEye: [.034, .084, .087],
+  rightEar: [-.09, .064, 0], leftEar: [.09, .064, 0],
+};
+
 export function createMannequin(scene) {
   const root = new THREE.Group();
   scene.add(root);

@@ -2,11 +2,18 @@
 
 ThreeJSPoser is a local 3D pose editor that helps artists create precise visual references for AI image generation. Pose a procedural mannequin, inspect joint angles, and save or share the pose as JSON. It does not generate images itself.
 
+> **Alpha version — extensive testing required.** ThreeJSPoser, including the new
+> OpenPose + depth export workflow, is experimental. Automated checks cover specific
+> scenarios; results still need extensive testing across poses, camera angles,
+> overlapping limbs, foreshortening, and actual ComfyUI/Forge generation workflows.
+> Export validation does not guarantee generated-image accuracy or a 90% pose match.
+
 ## What it does
 
 - Provides 54 joint controls across the spine, clavicles, forearm twist, fingers, thumbs and toes.
 - Lets you pose directly in 3D or set exact local-axis rotations in degrees.
 - Supports undo/redo, optional joint limits, hand presets, and JSON pose files.
+- Exports aligned OpenPose and depth images with previews and local PNG validation for testing with SD 1.5 MultiControlNet in ComfyUI or Forge.
 - Runs locally without model downloads, cloud accounts, telemetry or CDN requests.
 
 Use a saved pose or a screenshot of the mannequin as a visual guide when writing an image prompt or preparing a reference for an AI image tool. The editor does not connect to an AI service.
@@ -55,7 +62,17 @@ the full hierarchy, primitive geometry, materials, Front/active cameras and the
 procedural JavaScript source. See [the complete export format](POSE-EXPORT.md)
 for reconstruction instructions and visual scope. Existing pose files remain compatible.
 
-## Control-map export prototype
+## OpenPose + depth export (alpha)
+
+This experimental workflow turns the current 3D pose into two aligned control
+images: OpenPose describes projected body and hand landmarks, while depth supplies
+surface-distance information for overlapping limbs and foreshortening. Use them
+alongside your character design reference in your generation workflow. The app
+exports the maps; it does not configure or run ComfyUI/Forge or process the design sheet.
+
+![Alpha control-map export dialog showing the mannequin overlay, OpenPose, depth, and PNG validation result](screenshots/control-map-export-alpha.png)
+
+*The local validation result checks exported inputs, not the fidelity of a generated image.*
 
 Open **Export references → Control maps prototype**. The dialog captures the current
 pose and provides a separate perspective camera: drag the overlay to orbit,
@@ -68,6 +85,11 @@ round trips, opacity and grayscale depth, and compares sampled depth pixels with
 independent CPU ray/triangle intersections. Camera, size, or hand-option changes
 invalidate the result. Empty/unverifiable framing blocks download; cropped
 landmarks and surfaces produce explicit warnings.
+
+Depth comparisons use locally smooth pixel neighborhoods to avoid false failures
+at antialiased boundaries. They are sampled checks, not exhaustive verification of
+every pixel or an automatic assessment of limb overlap. Inspect the overlay and
+depth preview before using the maps.
 
 **Download validated ZIP** includes `openpose.png`, `depth.png`, `reference.png`,
 `overlay.png`, the unchanged `pose.json`, and `validation.json` with camera matrices,
@@ -98,11 +120,20 @@ or Forge. No generation service, model download or new runtime dependency is add
 - `src/history.js`: isolated snapshots for undo/redo.
 - `src/mannequin.js`: procedural body geometry and render hierarchy.
 - `src/main.js`: Three.js scene, controls and editor interactions.
+- `src/control-export.js`: perspective control-map previews, PNG validation and ZIP export.
 - `server.mjs`: localhost-only static server with an explicit file allowlist; no write API.
 
 ## Tests
 
 After `npm install`, run `npx playwright install chromium` once to install the browser used by the integration tests. Run `npm test` for the unit and browser suites. The browser tests verify WebGL rendering, four-view maximize/restore, joint picking and gizmo rotation in each view, and undo/redo. The test server uses port 4173; set `CI=1` in CI environments to disable reuse of an existing server.
+
+Control-map tests exercise the UI through validation and ZIP download, then inspect
+the exported images and pose. Coverage includes alignment, opacity, depth values,
+a reaching arm, crossed-arm overlap, rotated views with antialiased boundaries,
+camera changes, cropping warnings and empty-frame rejection. **These tests do not
+run Stable Diffusion. Extensive end-to-end testing in ComfyUI/Forge with different
+poses, checkpoints, control settings and character references is still required
+before relying on this alpha workflow.**
 
 Temporary browser files and dependency caches belong in the ignored `work/` folder.
 

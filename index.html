@@ -52,7 +52,7 @@
     </form>
   </dialog>
   <dialog id="control-dialog" aria-labelledby="control-title">
-    <header class="reference-header"><div><h2 id="control-title">Control maps prototype</h2><p>Perspective snapshot · OpenPose + depth for SD 1.5</p></div><button id="close-control-export" aria-label="Close control maps">×</button></header>
+    <header class="reference-header"><div><h2 id="control-title">Control maps prototype</h2><p>Perspective package · OpenPose, depth, masks and landmarks</p></div><button id="close-control-export" aria-label="Close control maps">×</button></header>
     <div class="control-content">
       <div class="control-options">
         <label>Image size <select id="control-size"><option value="512x768">512 × 768</option><option value="768x512">768 × 512</option><option value="512x512">512 × 512</option></select></label>
@@ -70,6 +70,7 @@
       <p id="control-validation" role="status" aria-live="polite">Not validated.</p>
       <ul id="control-warnings"></ul>
       <p class="small-note">Checks verify exported inputs, not generated-image fidelity. A 90% pose match still needs evaluation in your generation workflow.</p>
+      <p class="small-note">ZIP also includes binary silhouette, body-part segmentation, packed 16-bit depth with decoder, complete pose JSON, landmark visibility and a manifest. Images use this perspective camera; the complete JSON retains the editor Front camera.</p>
     </div>
     <footer class="reference-footer"><span>Local only · editor pose is unchanged</span><div><button id="validate-control-export">Validate PNGs</button><button id="download-control-export" class="primary" disabled>Download validated ZIP</button></div></footer>
   </dialog>

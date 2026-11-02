@@ -1,5 +1,6 @@
 node_modules/
 work/
+test-results/
 .playwright-cli/
 *.log
 experiences.md

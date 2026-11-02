@@ -352,17 +352,17 @@ $('export').addEventListener('click', () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   status('Pose downloaded · keep the file to reopen it later');
 });
-$('export-complete').addEventListener('click', async () => {
-  try {
-    const files = await Promise.all(['rig.js', 'mannequin.js'].map(async name => {
+function captureCompleteExport() {
+    // Start capture synchronously; source fetching must not mix later editor poses.
+    const source = Promise.all(['rig.js', 'mannequin.js'].map(async name => {
       const response = await fetch(`/src/${name}`);
       if (!response.ok) throw new Error(`Could not read procedural source ${name}`);
       return { name, source: await response.text() };
     }));
     const bounds = viewport.getBoundingClientRect();
-    const data = await createCompletePoseExport({
+    const data = createCompletePoseExport({
       mannequin, pose, restTransforms, activeView, renderer,
-      proceduralSource: { language: 'JavaScript ES modules', files,
+      proceduralSource: { language: 'JavaScript ES modules', files: [],
         dependencies: { three: THREE_VERSION },
         usage: "Save both files in one directory, resolve the 'three' import, then call createMannequin(scene) and sync(createPose()) for rest or sync(exported.pose) for current pose. Exported transforms also include any additional parent/root transforms." },
       views: cameras.map((camera, index) => {
@@ -372,6 +372,14 @@ $('export-complete').addEventListener('click', async () => {
           lastVisibleViewport: lastVisibleViewports[index], projectionSize: projectionSizes[index] };
       }),
     });
+    return Promise.all([data, source]).then(([result, files]) => {
+      result.geometry.proceduralSource.files = files;
+      return result;
+    });
+}
+$('export-complete').addEventListener('click', async () => {
+  try {
+    const data = await captureCompleteExport();
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = 'pose-export.json'; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -379,7 +387,7 @@ $('export-complete').addEventListener('click', async () => {
   } catch (error) { status(`Complete pose export failed: ${error.message}`, 'error'); }
 });
 const referenceDialog = $('reference-dialog');
-setupControlExport({ mannequin, getPose: () => pose, createZip: createStoredZip, status });
+setupControlExport({ mannequin, getPose: () => pose, captureCompleteExport, createZip: createStoredZip, status });
 const referenceViews = $('reference-views');
 const referenceOptions = viewDefinitions.map((view, index) => ({ view, index, close: false, zoom: 1, target: null, position: null }));
 const referenceRenderCanvas = document.createElement('canvas');

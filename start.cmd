@@ -5,6 +5,6 @@ if not exist node_modules\three\build\three.module.js (
   pause
   exit /b 1
 )
-echo Open http://127.0.0.1:5173 in Chrome. Keep this window open.
+echo Starting local server. Use the URL shown below and keep this window open.
 node server.mjs
 if errorlevel 1 pause

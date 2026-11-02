@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const port = Number(process.env.PORT || 5173);
+let port = Number(process.env.PORT || 5173);
+let retries = 0;
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.ico': 'image/x-icon' };
 const server = http.createServer(async (req, res) => {
   try {
@@ -24,5 +25,14 @@ const server = http.createServer(async (req, res) => {
     res.end('Unable to serve this file.');
   }
 });
-server.on('error', error => { console.error(`Cannot start local server: ${error.message}`); process.exitCode = 1; });
+server.on('error', error => {
+  if (error.code === 'EADDRINUSE' && retries < 100 && port < 65535) {
+    port++;
+    retries++;
+    server.listen(port, '127.0.0.1', () => console.log(`ThreeJSPoser ready: http://127.0.0.1:${port}`));
+    return;
+  }
+  console.error(`Cannot start local server: ${error.message}`);
+  process.exitCode = 1;
+});
 server.listen(port, '127.0.0.1', () => console.log(`ThreeJSPoser ready: http://127.0.0.1:${port}`));

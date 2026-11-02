@@ -99,6 +99,14 @@ images share one pose snapshot, camera, crop and resolution. Depth is opaque
 camera-space distance range is recorded in the report. Inspection images are not
 control maps.
 
+The ZIP also includes `mannequin.png`, binary `silhouette.png`, body-part
+`segmentation.png`, losslessly packed `depth16.png` with `decode-depth.js`,
+`pose-export.json`, `landmarks.json` and `manifest.json`. The manifest records
+the image camera, palette, depth precision and file hashes. Landmark visibility
+reports body-part occlusion with explicit unknown states. The image camera remains
+the prototype's perspective camera; the complete JSON preserves the separate
+editor Front camera. See [reference package conventions and decoding](REFERENCE-PACKAGE.md).
+
 For SD 1.5, use the pose image with an OpenPose ControlNet and the depth image with
 a depth ControlNet such as `control_v11f1p_sd15_depth`. Bypass pose/depth
 preprocessors because these maps are already prepared. Preserve identical framing

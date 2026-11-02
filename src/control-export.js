@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FINGER_LENGTHS } from './rig.js';
 import { HEAD_ANCHORS } from './mannequin.js';
+import { renderDataMaps, PALETTE, PALETTE_VERSION, segmentId, sha256, classifyOcclusion, OCCLUSION } from './reference-package.js';
+import { decodeDepth16 } from './depth-codec.js';
 
 // COCO-18 ordering and ControlNet OpenPose palette/topology, not rig traversal order.
 // Reference: Mikubill/sd-webui-controlnet/annotator/openpose/util.py.
@@ -16,7 +18,8 @@ const canvas = (width, height) => Object.assign(document.createElement('canvas')
 const pixels = c => c.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, c.width, c.height).data;
 
 function landmarks(mannequin) {
-  const point = (name, bone = name, offset = [0, 0, 0]) => ({ name,
+  const point = (name, bone = name, offset = [0, 0, 0]) => ({ name, bone, localOffset: offset,
+    source: HEAD_ANCHORS[name] ? 'approximate-head-surface-anchor' : name.endsWith('Tip') ? 'geometry-derived-endpoint' : 'rig-joint',
     world: mannequin.bones[bone].localToWorld(new THREE.Vector3(...offset)).toArray() });
   const body = BODY.map(name => HEAD_ANCHORS[name] ? point(name, 'head', HEAD_ANCHORS[name])
     : mannequin.bones[name] ? point(name) : null);
@@ -36,7 +39,8 @@ function project(points, camera, width, height) {
     if (!point) return null;
     const world = new THREE.Vector3(...point.world), ndc = world.clone().project(camera);
     const distance = -world.clone().applyMatrix4(camera.matrixWorldInverse).z;
-    return { ...point, x: (ndc.x + 1) * width / 2, y: (1 - ndc.y) * height / 2, distance,
+    return { ...point, x: (ndc.x + 1) * width / 2, y: (1 - ndc.y) * height / 2,
+      normalized: [(ndc.x + 1) / 2, (1 - ndc.y) / 2], distance,
       inFrame: distance >= camera.near && distance <= camera.far && Math.abs(ndc.x) < 1 && Math.abs(ndc.y) < 1 };
   });
 }
@@ -103,9 +107,9 @@ function depthSamples(image, meshes, camera, range) {
   return samples;
 }
 
-export function setupControlExport({ mannequin, getPose, createZip, status }) {
+export function setupControlExport({ mannequin, getPose, captureCompleteExport, createZip, status }) {
   const dialog = $('control-dialog'), overlay = $('control-overlay'), poseCanvas = $('control-pose'), depthCanvas = $('control-depth');
-  let renderer, controls, scene, meshes, camera, bounds, sourcePoints, snapshot, reference, last, validated, busy = false;
+  let renderer, controls, scene, meshes, camera, bounds, sourcePoints, snapshot, completeSnapshot, reference, last, validated, busy = false;
   const surface = new THREE.MeshStandardMaterial({ color: 0xc9c9c9, roughness: 1 });
   const depthMaterial = new THREE.ShaderMaterial({
     uniforms: { closest: { value: 0 }, farthest: { value: 1 } },
@@ -197,6 +201,7 @@ export function setupControlExport({ mannequin, getPose, createZip, status }) {
       controls?.dispose();
       mannequin.root.updateWorldMatrix(true, true);
       snapshot = structuredClone(getPose()); sourcePoints = landmarks(mannequin);
+      completeSnapshot = captureCompleteExport().then(data => ({ data }), error => ({ error }));
       scene = new THREE.Scene(); scene.background = new THREE.Color(0);
       meshes = mannequin.pickables.map(original => {
         const mesh = new THREE.Mesh(original.geometry, surface); mesh.matrix.copy(original.matrixWorld); mesh.matrixAutoUpdate = false;
@@ -240,12 +245,94 @@ export function setupControlExport({ mannequin, getPose, createZip, status }) {
       if (samples.length < 5) throw new Error('Too little visible surface to validate depth. Move closer or use Frame body.');
       const maxError = Math.max(...samples.map(sample => sample.error));
       if (maxError > DEPTH_TOLERANCE) throw new Error(`Depth differs from surface geometry by ${maxError}/255. Export blocked.`);
+      const captured = await completeSnapshot;
+      if (captured.error) throw captured.error;
+      const complete = captured.data;
+      const maps = renderDataMaps(renderer, scene, meshes, camera, last.width, last.height, last.depth);
+      const precisePixels = pixels(maps.depth16), maskPixels = pixels(maps.silhouette), segmentPixels = pixels(maps.segmentation);
+      const paletteColors = new Set(PALETTE.map(entry => entry.rgb.join(',')));
+      for (let i = 0; i < precisePixels.length; i += 4) {
+        const foreground = precisePixels[i] * 256 + precisePixels[i + 1] > 0;
+        if ((maskPixels[i] === 255) !== foreground ||
+          Boolean(segmentPixels[i] || segmentPixels[i + 1] || segmentPixels[i + 2]) !== foreground ||
+          !paletteColors.has([...segmentPixels.slice(i, i + 3)].join(','))) throw new Error('Data pass boundaries or palette differ.');
+      }
+      const preciseSamples = samples.map(sample => {
+        const index = (sample.y * last.width + sample.x) * 4;
+        const actual = precisePixels[index] * 256 + precisePixels[index + 1];
+        const expected = Math.round(65535 * THREE.MathUtils.clamp((last.depth.far - sample.distance) / (last.depth.far - last.depth.near), 1 / 65535, 1));
+        return { x: sample.x, y: sample.y, expected, actual, error: Math.abs(actual - expected) };
+      });
+      const preciseError = Math.max(...preciseSamples.map(sample => sample.error));
+      // Rasterized triangles and CPU rays differ slightly at subpixel precision;
+      // this is a geometry comparison tolerance, separate from 16-bit rounding.
+      if (preciseError > 16) throw new Error(`Packed depth differs from geometry by ${preciseError}/65535. Export blocked.`);
+      for (const [name, source] of [['mannequin.png', reference], ['silhouette.png', maps.silhouette],
+        ['segmentation.png', maps.segmentation], ['depth16.png', maps.depth16]]) {
+        const encoded = await encodeDecode(source); files.push({ name, data: encoded.data });
+      }
       const checks = { pngRoundTripExact: true, matchingDimensions: true, opaque: true, grayscaleDepth: true,
-        surfaceDepth: { count: samples.length, maxError, tolerance: DEPTH_TOLERANCE, samples } };
+        surfaceDepth: { count: samples.length, maxError, tolerance: DEPTH_TOLERANCE, samples },
+        matchingDataBoundaries: true, exactSegmentationPalette: true,
+        preciseDepth: { count: preciseSamples.length, maxError: preciseError, tolerance: 16,
+          maxErrorMetres: preciseError * (last.depth.far - last.depth.near) / 65535, samples: preciseSamples } };
       const report = { ...last, checks, generatedImageFidelity: 'Not evaluated; manual overlay and overlap review required.' };
       const textFile = (name, value) => ({ name, data: new TextEncoder().encode(value) });
       files.push(textFile('validation.json', JSON.stringify(report, null, 2)), textFile('pose.json', JSON.stringify(snapshot, null, 2)),
         textFile('README.txt', 'ThreeJSPoser control maps prototype\n\nUse openpose.png with an SD 1.5 OpenPose ControlNet and depth.png with an SD 1.5 depth ControlNet (control_v11f1p_sd15_depth). These maps are already prepared: bypass pose/depth preprocessors.\nKeep the exported aspect ratio and identical framing for both maps.\nreference.png and overlay.png are inspection images, not control maps.\nvalidation.json records the perspective camera, pixel-space landmarks, depth convention and decoded-PNG checks. pose.json is the unchanged editor pose snapshot.\n\nNose, eyes and ears are approximate head-surface anchors that follow head rotation. Face expressions are not supplied; hand tips derive from finger geometry. Hidden joints are retained. Check overlap manually. Depth contains segmented mannequin proportions.\nPassing checks does not establish 90% generated-image fidelity or replace testing in ComfyUI/Forge.\n'));
+      files.push(textFile('pose-export.json', JSON.stringify(complete, null, 2)),
+        textFile('decode-depth.js', `// Read raw PNG R/G bytes; range is manifest.depth. Zero returns null (background).\nexport ${decodeDepth16.toString()}\n`));
+      const cameraId = 'control-perspective';
+      const conventions = { worldUnits: 'metres', handedness: 'right-handed', worldUp: '+Y', anatomicalLeft: '+X',
+        imageOrigin: 'top-left', imageX: 'right', imageY: 'down', pixelCoordinates: 'continuous image-edge coordinates; pixel centers are (column+0.5,row+0.5)',
+        normalizedCoordinates: '[x/width,y/height]; not clamped', cameraDepth: '-cameraSpace.z in metres' };
+      const depth = { ...last.depth, normalization: 'pose-world-bounds camera-space range plus 0.01 metres padding; recomputed on camera/pose changes',
+        depth16: { encoding: 'RGB8 PNG; R=high byte, G=low byte, B=0, A=255', byteOrder: 'big-endian',
+          decodeInteger: 'q = 256*R + G', encode: 'q = round(65535 * clamp((far-distance)/(far-near), 1/65535, 1))',
+          decodeMetres: 'q == 0 ? null : far - q/65535*(far-near)', background: 0,
+          quantizationStepMetres: (last.depth.far - last.depth.near) / 65535,
+          maxRoundingErrorMetres: (last.depth.far - last.depth.near) / 131070,
+          farClampMaxErrorMetres: (last.depth.far - last.depth.near) / 65535,
+          cpuGeometryComparisonToleranceMetres: 16 * (last.depth.far - last.depth.near) / 65535,
+          sampling: 'unmultisampled pixel centers; depth.png has antialiased boundaries',
+          colorSpace: 'raw data; no color conversion or tone mapping; do not treat as display RGB or a conditioning image' } };
+      const usage = files.find(file => file.name === 'README.txt');
+      usage.data = new TextEncoder().encode(new TextDecoder().decode(usage.data) +
+        `\nAdditional package files\nmannequin.png equals reference.png. silhouette.png is binary (0 background, 255 body). segmentation.png uses the exact palette and joint mapping in manifest.json. Neither mask uses antialiasing.\npose-export.json contains complete rig/geometry and retains editor camera.front; all package images and landmarks use the separate perspective camera in manifest.json.\nlandmarks.json documents top-left pixel coordinates, normalized coordinates, source precision and associated-body-part occlusion. Unknown and out-of-frame visibility use null, not false. Hidden joints are still drawn.\n\nPacked precision depth\ndepth16.png is RGB8 data, not grayscale16 or a conditioning image. Linear camera-space distance d=-cameraSpace.z, metres. R is the high byte, G the low byte, B=0, A=255. q=R*256+G; q=0 means background, otherwise d=far-q/65535*(far-near). Encoding: q=round(65535*clamp((far-d)/(far-near),1/65535,1)). No tone mapping or color conversion. Read raw bytes without gamma, resizing or filtering.\nThe same pose, camera, size and normalization range drive depth.png and depth16.png. depth.png is 8-bit grayscale with antialiased edges; depth16.png samples unmultisampled pixel centers.\nNear=${depth.near} m; far=${depth.far} m. Range is recomputed from bounds/camera and recorded in manifest.depth. Quantization step=${depth.depth16.quantizationStepMetres} m; maximum rounding error=${depth.depth16.maxRoundingErrorMetres} m (far-end clamp up to one step). GPU/CPU raster comparison tolerance=${depth.depth16.cpuGeometryComparisonToleranceMetres} m, separately from quantization.\nImport decodeDepth16 from decode-depth.js and call decodeDepth16(R,G,manifest.depth); background returns null.\nmanifest.json links all companion files with SHA-256 hashes and a shared pose/geometry/image-camera snapshot identifier. Palette compatibility with segmentation conditioning models is not assumed.\n`);
+      const snapshotHash = await sha256(new TextEncoder().encode(JSON.stringify({ pose: complete.pose,
+        rig: complete.rig, geometry: complete.geometry, camera: last.camera, width: last.width, height: last.height, hands: last.hands.length > 0 })));
+      const packageId = `pose-${snapshotHash}`;
+      const nodes = new Map(complete.rig.joints.map(joint => [joint.name, joint.node]));
+      const jointParents = new Map(complete.rig.joints.map(joint => [joint.name, joint.parent]));
+      const projected = [...last.body, ...last.hands.flat()];
+      const landmarks = { formatVersion: '1.0', packageId, snapshotHash, cameraId, width: last.width, height: last.height,
+        conventions, occlusion: OCCLUSION,
+        landmarks: [...new Map(projected.filter(Boolean).map(point => [point.name, point])).values()].map(point => ({
+          id: point.name, anatomicalName: point.name, rigJoint: point.bone, rigNode: nodes.get(point.bone), source: point.source,
+          localOffset: point.localOffset, world: point.world, pixel: [point.x, point.y], normalized: point.normalized,
+          cameraDepthMetres: point.distance, available: true, inFrame: point.inFrame,
+          visibility: classifyOcclusion(point, meshes, camera, [segmentId(point.bone),
+            segmentId(jointParents.get(point.bone) ?? point.bone)]),
+        })), unavailableLandmarks: BODY.filter((name, index) => !last.body[index]),
+        omittedGroups: last.hands.length ? [] : ['hands-disabled-by-user'] };
+      files.push(textFile('landmarks.json', JSON.stringify(landmarks, null, 2)));
+      const roles = { 'openpose.png': 'body-and-optional-hand-conditioning', 'depth.png': '8-bit-depth-conditioning',
+        'reference.png': 'mannequin-inspection-legacy-alias', 'overlay.png': 'skeleton-alignment-inspection',
+        'mannequin.png': 'mannequin-render', 'silhouette.png': 'binary-mask', 'segmentation.png': 'body-part-labels',
+        'depth16.png': 'packed-16-bit-depth-validation', 'validation.json': 'validation-report', 'pose.json': 'legacy-editable-pose',
+        'pose-export.json': 'complete-rig-geometry-and-editor-cameras', 'landmarks.json': 'projected-landmarks',
+        'decode-depth.js': 'standalone-packed-depth-decoder', 'README.txt': 'usage' };
+      const manifest = { formatVersion: '1.0', packageId, snapshotHash: { algorithm: 'SHA-256', value: snapshotHash },
+        resolution: { width: last.width, height: last.height }, camera: { id: cameraId, ...last.camera },
+        completePoseCamera: 'pose-export.json camera.front preserves the editor Front; package images use manifest.camera',
+        conventions, depth, occlusion: OCCLUSION, segmentation: { paletteVersion: PALETTE_VERSION, palette: PALETTE,
+          jointMapping: Object.fromEntries(complete.rig.joints.map(joint => [joint.name, segmentId(joint.name)])),
+          sampling: 'unmultisampled; exact RGB palette; background ID=0' }, silhouette: { binary: true, background: 0, foreground: 255 },
+        rendering: { threeVersion: complete.coordinateSystem.threeVersion, referenceMaterial: 'uniform gray',
+          lighting: 'Hemisphere white/0x555555 intensity 2; directional white intensity 2 at (-3,4,5)',
+          pixelRatio: 1, toneMapping: 'none', dataPassColorSpace: 'none' },
+        files: await Promise.all(files.map(async file => ({ name: file.name, role: roles[file.name], sha256: await sha256(file.data) }))) };
+      files.push(textFile('manifest.json', JSON.stringify(manifest, null, 2)));
       validated = files.map(({ name, data }) => ({ name, data }));
       $('control-validation').textContent = `PNG checks passed · ${samples.length} surface samples · max depth error ${maxError}/255. Review warnings before use.`;
     } catch (error) { $('control-validation').textContent = `Validation failed: ${error.message}`; }

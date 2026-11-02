@@ -2,6 +2,9 @@ import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { createMannequin } from '../src/mannequin.js';
+import { createHash } from 'node:crypto';
+import { reconstructPose } from '../src/reconstruct-pose.js';
+import { decodeDepth16 } from '../src/depth-codec.js';
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -32,6 +35,71 @@ async function validate(page) {
   await page.getByRole('button', { name: 'Validate PNGs', exact: true }).click();
   await expect(page.locator('#control-validation')).toContainText('PNG checks passed', { timeout: 30_000 });
   await expect(page.locator('#download-control-export')).toBeEnabled();
+}
+
+async function verifyPackage(page, files) {
+  const manifest = JSON.parse(files['manifest.json']), report = JSON.parse(files['validation.json']);
+  const landmarks = JSON.parse(files['landmarks.json']), complete = JSON.parse(files['pose-export.json']);
+  expect(manifest.camera.type).toBe('perspective');
+  expect(complete.camera.front.type).toBe('orthographic'); // Intentionally separate editor camera.
+  expect(manifest.camera.worldMatrix).toEqual(report.camera.worldMatrix);
+  expect(manifest.camera.projectionMatrix).toEqual(report.camera.projectionMatrix);
+  expect(landmarks.snapshotHash).toBe(manifest.snapshotHash.value);
+  expect(landmarks.packageId).toBe(manifest.packageId);
+  for (const file of manifest.files) {
+    expect(file.role).toBeTruthy();
+    expect(createHash('sha256').update(files[file.name]).digest('hex')).toBe(file.sha256);
+  }
+  expect(manifest.files.map(file => file.name).sort()).toEqual(Object.keys(files).filter(name => name !== 'manifest.json').sort());
+  expect(files['mannequin.png'].equals(files['reference.png'])).toBe(true);
+  const rebuilt = reconstructPose(complete);
+  for (const point of landmarks.landmarks) {
+    const joint = complete.rig.joints.find(joint => joint.name === point.rigJoint);
+    expect(point.rigNode).toBe(joint.node);
+    const world = new THREE.Vector3(...point.localOffset).applyMatrix4(rebuilt.nodes.get(point.rigNode).matrixWorld);
+    world.toArray().forEach((value, i) => expect(point.world[i]).toBeCloseTo(value, 10));
+    expect(point.normalized[0]).toBeCloseTo(point.pixel[0] / report.width, 10);
+    expect(point.normalized[1]).toBeCloseTo(point.pixel[1] / report.height, 10);
+    expect(['visible', 'occluded', 'unknown', 'out-of-frame']).toContain(point.visibility.status);
+    if (!point.inFrame) expect(point.visibility.occluded).toBe(null);
+  }
+  const result = await page.evaluate(async ({ images, manifest, samples, decoder }) => {
+    const decoded = {};
+    for (const [name, base64] of Object.entries(images)) {
+      const image = new Image(); image.src = `data:image/png;base64,${base64}`; await image.decode();
+      const c = document.createElement('canvas'); c.width = image.width; c.height = image.height;
+      const context = c.getContext('2d'); context.drawImage(image, 0, 0);
+      decoded[name] = context.getImageData(0, 0, c.width, c.height).data;
+      if (c.width !== manifest.resolution.width || c.height !== manifest.resolution.height) throw new Error('Image size mismatch');
+    }
+    const silhouette = decoded['silhouette.png'], segments = decoded['segmentation.png'], precise = decoded['depth16.png'];
+    const palette = new Set(manifest.segmentation.palette.map(entry => entry.rgb.join(',')));
+    let foreground = 0;
+    for (let i = 0; i < silhouette.length; i += 4) {
+      const mask = silhouette[i];
+      if (![0, 255].includes(mask) || silhouette[i + 1] !== mask || silhouette[i + 2] !== mask || silhouette[i + 3] !== 255) throw new Error('Nonbinary mask');
+      if (!palette.has([...segments.slice(i, i + 3)].join(','))) throw new Error('Nonpalette color');
+      const q = precise[i] * 256 + precise[i + 1];
+      if (Boolean(q) !== Boolean(mask) || Boolean(segments[i] || segments[i + 1] || segments[i + 2]) !== Boolean(mask)) throw new Error('Boundary mismatch');
+      if (precise[i + 2] !== 0 || precise[i + 3] !== 255 || segments[i + 3] !== 255) throw new Error('Corrupted data channels');
+      foreground += Boolean(mask);
+    }
+    const url = URL.createObjectURL(new Blob([decoder], { type: 'text/javascript' }));
+    const { decodeDepth16 } = await import(url); URL.revokeObjectURL(url);
+    const depths = samples.map(sample => {
+      const i = (sample.y * manifest.resolution.width + sample.x) * 4;
+      return { q: precise[i] * 256 + precise[i + 1], metres: decodeDepth16(precise[i], precise[i + 1], manifest.depth) };
+    });
+    return { foreground, depths };
+  }, { images: Object.fromEntries(Object.entries(files).filter(([name]) => name.endsWith('.png')).map(([name, data]) => [name, data.toString('base64')])),
+    manifest, samples: report.checks.surfaceDepth.samples, decoder: files['decode-depth.js'].toString() });
+  expect(result.foreground).toBeGreaterThan(100);
+  result.depths.forEach((value, index) => {
+    const sample = report.checks.surfaceDepth.samples[index];
+    expect(Math.abs(value.metres - sample.distance)).toBeLessThanOrEqual(manifest.depth.depth16.cpuGeometryComparisonToleranceMetres);
+    expect(value.metres).toBe(decodeDepth16(value.q >> 8, value.q & 255, manifest.depth));
+  });
+  return { manifest, landmarks, report };
 }
 
 // Independent pinhole projection of the coordinates in the downloaded report.
@@ -84,7 +152,10 @@ test('downloads aligned opaque maps, decoded-pixel validation, and unchanged pos
   await page.locator('#control-hands').uncheck();
   await validate(page);
   const files = unzip(await download(page, '#download-control-export'));
-  expect(Object.keys(files)).toEqual(['openpose.png', 'depth.png', 'reference.png', 'overlay.png', 'validation.json', 'pose.json', 'README.txt']);
+  await verifyPackage(page, files);
+  expect(Object.keys(files)).toEqual(['openpose.png', 'depth.png', 'reference.png', 'overlay.png',
+    'mannequin.png', 'silhouette.png', 'segmentation.png', 'depth16.png',
+    'validation.json', 'pose.json', 'README.txt', 'pose-export.json', 'decode-depth.js', 'landmarks.json', 'manifest.json']);
   const report = JSON.parse(files['validation.json']);
   expect(report.cropped).toEqual([]); expect(report.surfaceClipped).toBe(false);
   expect(report.body).toHaveLength(18);
@@ -257,6 +328,7 @@ test('crossed arms export the front limb depth where their projections overlap',
   }
   await openPrototype(page); await validate(page);
   const files = unzip(await download(page, '#download-control-export')), report = JSON.parse(files['validation.json']);
+  await verifyPackage(page, files);
   // At world x=0 both upper arms share their shoulder height. Left has greater +Z
   // (.19*tan(35°) vs .19*tan(15°)), so it must be the foreground surface.
   const shoulder = report.body[5], scale = report.height / (2 * Math.tan(report.camera.fov * Math.PI / 360));
@@ -277,6 +349,7 @@ test('crossed arms export the front limb depth where their projections overlap',
   const expected = Math.round(255 * (report.depth.far - distance) / (report.depth.far - report.depth.near));
   const decoded = await inspectFiles(page, files, report, [probe]);
   expect(Math.abs(decoded['depth.png'].probes[0][0] - expected)).toBeLessThanOrEqual(3);
+  expect(decoded['segmentation.png'].probes[0]).toEqual([255, 0, 0, 255]); // Anatomical left upper arm wins the crossing.
 });
 
 test('validates and downloads a rotated view with antialiased depth boundaries', async ({ page }) => {
@@ -302,4 +375,47 @@ test('validates and downloads a rotated view with antialiased depth boundaries',
   report.checks.surfaceDepth.samples.forEach((sample, i) => {
     expect(Math.abs(decoded['depth.png'].surfaceSamples[i] - sample.expected)).toBeLessThanOrEqual(3);
   });
+});
+
+test('unchanged package repeats exactly and size changes produce a new snapshot identifier', async ({ page }) => {
+  await openPrototype(page); await validate(page);
+  const first = await download(page, '#download-control-export');
+  const initial = await verifyPackage(page, unzip(first));
+  await validate(page);
+  expect((await download(page, '#download-control-export')).equals(first)).toBe(true);
+  await page.locator('#control-size').selectOption('512x512');
+  await expect(page.locator('#download-control-export')).toBeDisabled();
+  await validate(page);
+  const changed = await verifyPackage(page, unzip(await download(page, '#download-control-export')));
+  expect(changed.manifest.snapshotHash.value).not.toBe(initial.manifest.snapshotHash.value);
+  expect(changed.manifest.resolution).toEqual({ width: 512, height: 512 });
+});
+
+for (const [name, rotations] of [
+  ['raised left arm', [['leftShoulder', [-110, 0, 100]]]],
+  ['raised right arm', [['rightShoulder', [-110, 0, -100]]]],
+  ['bent knee', [['leftKnee', [95, 0, 0]]]],
+  ['rotated torso', [['chest', [0, 35, 15]]]],
+  ['crossed legs', [['leftHip', [0, 15, -30]], ['rightHip', [0, -15, 30]]]],
+  ['wrist occluded by torso', [['leftShoulder', [70, 0, -20]]]],
+]) test(`complete package retains exact transforms and aligned masks for ${name}`, async ({ page }) => {
+  await page.locator('#limits').uncheck();
+  for (const [joint, angles] of rotations) {
+    await page.getByLabel('Selected joint', { exact: true }).selectOption(joint);
+    for (const [i, axis] of ['X', 'Y', 'Z'].entries()) {
+      await page.locator(`#angle-${axis}`).fill(String(angles[i])); await page.locator(`#angle-${axis}`).press('Tab');
+    }
+  }
+  const poseBefore = JSON.parse(await download(page, '#export'));
+  await openPrototype(page); await validate(page);
+  const files = unzip(await download(page, '#download-control-export'));
+  const { landmarks } = await verifyPackage(page, files);
+  expect(JSON.parse(files['pose.json'])).toEqual(poseBefore);
+  if (name.includes('occluded')) {
+    const wrist = landmarks.landmarks.find(point => point.id === 'leftWrist');
+    expect(wrist.visibility.status).toBe('occluded');
+    expect(wrist.visibility.occluderSegmentId).toBe(2); // Torso; independently arranged behind the spine.
+  }
+  await page.locator('#close-control-export').click();
+  expect(JSON.parse(await download(page, '#export'))).toEqual(poseBefore);
 });

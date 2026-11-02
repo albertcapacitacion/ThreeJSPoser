@@ -48,8 +48,30 @@
     <form method="dialog" class="reference-shell">
       <header class="reference-header"><div><h2 id="reference-title">Export pose references</h2><p>All four full-body views are included. Add close-ups to views where you need more detail.</p></div><button value="cancel" aria-label="Close">×</button></header>
       <div id="reference-views" class="reference-views"></div>
-      <div class="reference-footer"><span id="reference-count">4 full-body images</span><div><button value="cancel">Cancel</button><button type="button" id="download-references" class="primary">Download ZIP</button></div></div>
+      <div class="reference-footer"><span id="reference-count">4 full-body images</span><div><button type="button" id="open-control-export">Control maps prototype</button><button value="cancel">Cancel</button><button type="button" id="download-references" class="primary">Download ZIP</button></div></div>
     </form>
+  </dialog>
+  <dialog id="control-dialog" aria-labelledby="control-title">
+    <header class="reference-header"><div><h2 id="control-title">Control maps prototype</h2><p>Perspective snapshot · OpenPose + depth for SD 1.5</p></div><button id="close-control-export" aria-label="Close control maps">×</button></header>
+    <div class="control-content">
+      <div class="control-options">
+        <label>Image size <select id="control-size"><option value="512x768">512 × 768</option><option value="768x512">768 × 512</option><option value="512x512">512 × 512</option></select></label>
+        <label>Field of view <input id="control-fov" aria-label="Export field of view" type="range" min="20" max="80" value="40"><output id="control-fov-value">40°</output></label>
+        <label><input id="control-hands" type="checkbox" checked> Include hands</label>
+        <button id="control-frame">Frame body</button>
+      </div>
+      <p class="small-note">Drag the overlay to orbit, right-drag to pan, scroll to move closer. Framing and field of view affect perspective. Reopen to capture pose edits.</p>
+      <div class="control-previews">
+        <figure><figcaption>Mannequin + skeleton overlay</figcaption><canvas id="control-overlay" aria-label="Perspective overlay preview" tabindex="0"></canvas></figure>
+        <figure><figcaption>OpenPose · black background</figcaption><canvas id="control-pose" aria-label="OpenPose preview"></canvas></figure>
+        <figure><figcaption>Depth · nearer is brighter</figcaption><canvas id="control-depth" aria-label="Depth preview"></canvas></figure>
+      </div>
+      <p class="small-note">Prototype limits: nose is a geometry proxy; eyes, ears and facial expressions are unsupported. Projected hidden joints are retained; inspect overlaps manually. Segmented mannequin proportions are present in depth.</p>
+      <p id="control-validation" role="status" aria-live="polite">Not validated.</p>
+      <ul id="control-warnings"></ul>
+      <p class="small-note">Checks verify exported inputs, not generated-image fidelity. A 90% pose match still needs evaluation in your generation workflow.</p>
+    </div>
+    <footer class="reference-footer"><span>Local only · editor pose is unchanged</span><div><button id="validate-control-export">Validate PNGs</button><button id="download-control-export" class="primary" disabled>Download validated ZIP</button></div></footer>
   </dialog>
   <script type="module" src="/src/main.js"></script>
 </body>

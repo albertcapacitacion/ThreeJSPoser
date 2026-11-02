@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('canvas')).toBeVisible();
+  await expect(page.locator('#viewport canvas')).toBeVisible();
   await expect(page.locator('#status')).toHaveText('Ready · select a joint to begin');
 });
 

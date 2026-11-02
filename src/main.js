@@ -5,6 +5,7 @@ import { JOINTS, JOINT_MAP, createPose, limitAngles, validatePose } from './rig.
 import { createHistory } from './history.js';
 import { createMannequin } from './mannequin.js';
 import { captureRigTransforms, createCompletePoseExport, THREE_VERSION } from './pose-export.js';
+import { setupControlExport } from './control-export.js';
 
 const $ = id => document.getElementById(id);
 const degrees = THREE.MathUtils.radToDeg;
@@ -378,6 +379,7 @@ $('export-complete').addEventListener('click', async () => {
   } catch (error) { status(`Complete pose export failed: ${error.message}`, 'error'); }
 });
 const referenceDialog = $('reference-dialog');
+setupControlExport({ mannequin, getPose: () => pose, createZip: createStoredZip, status });
 const referenceViews = $('reference-views');
 const referenceOptions = viewDefinitions.map((view, index) => ({ view, index, close: false, zoom: 1, target: null, position: null }));
 const referenceRenderCanvas = document.createElement('canvas');
@@ -537,6 +539,7 @@ $('pose-file').addEventListener('change', async event => {
 });
 
 window.addEventListener('keydown', event => {
+  if ($('control-dialog').open) return;
   if (event.key === 'Escape' && activeTransform.dragging && dragStart) {
     cancelling = true;
     activeTransform.reset();
@@ -589,6 +592,7 @@ fitBody();
 $('boot-message').remove();
 status('Ready · select a joint to begin');
 renderer.setAnimationLoop(() => {
+  if ($('control-dialog').open) return;
   const worldPosition = mannequin.bones[selected].getWorldPosition(new THREE.Vector3());
   orb.position.copy(worldPosition);
   panes.forEach((pane, index) => {

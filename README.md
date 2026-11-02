@@ -55,6 +55,43 @@ the full hierarchy, primitive geometry, materials, Front/active cameras and the
 procedural JavaScript source. See [the complete export format](POSE-EXPORT.md)
 for reconstruction instructions and visual scope. Existing pose files remain compatible.
 
+## Control-map export prototype
+
+Open **Export references → Control maps prototype**. The dialog captures the current
+pose and provides a separate perspective camera: drag the overlay to orbit,
+right-drag to pan, scroll to move closer, or adjust the field of view. **Frame body**
+fits the mannequin at the selected aspect ratio. Reopen the dialog to capture pose edits.
+
+The three previews show the mannequin/skeleton overlay, OpenPose, and depth.
+**Validate PNGs** encodes and decodes the actual output images, checks exact pixel
+round trips, opacity and grayscale depth, and compares sampled depth pixels with
+independent CPU ray/triangle intersections. Camera, size, or hand-option changes
+invalidate the result. Empty/unverifiable framing blocks download; cropped
+landmarks and surfaces produce explicit warnings.
+
+**Download validated ZIP** includes `openpose.png`, `depth.png`, `reference.png`,
+`overlay.png`, the unchanged `pose.json`, and `validation.json` with camera matrices,
+pixel-space/world-space landmarks, depth range, warnings and sample errors. All
+images share one pose snapshot, camera, crop and resolution. Depth is opaque
+8-bit grayscale: nearer surfaces are brighter, background is black. The linear
+camera-space distance range is recorded in the report. Inspection images are not
+control maps.
+
+For SD 1.5, use the pose image with an OpenPose ControlNet and the depth image with
+a depth ControlNet such as `control_v11f1p_sd15_depth`. Bypass pose/depth
+preprocessors because these maps are already prepared. Preserve identical framing
+and aspect ratio in the workflow. See the [ControlNet depth model guidance](https://github.com/lllyasviel/ControlNet-v1-1-nightly#controlnet-11-depth)
+and [OpenPose rendering convention](https://github.com/Mikubill/sd-webui-controlnet/blob/main/annotator/openpose/util.py).
+
+This prototype maps body landmarks and optional 21-point hands (including derived
+fingertip endpoints). The nose is an approximate landmark based on the mannequin
+geometry; eyes, ears and facial expressions are omitted. Hidden joints remain in
+the projected skeleton. Depth includes the mannequin's segmented shape and
+proportions. Inspect occlusion and alignment manually. Passing export checks does
+not establish generated-image fidelity or guarantee a 90% pose match: that still
+requires evaluation with the chosen checkpoint and character reference in ComfyUI
+or Forge. No generation service, model download or new runtime dependency is added.
+
 ## Compact implementation
 
 - `src/rig.js`: rig definition, joint limits and pose validation, independent of the renderer.

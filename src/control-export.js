@@ -12,6 +12,8 @@ const BODY = ['nose', 'neck', 'rightShoulder', 'rightElbow', 'rightWrist', 'left
 const LINKS = [[1,2],[1,5],[2,3],[3,4],[5,6],[6,7],[1,8],[8,9],[9,10],[1,11],[11,12],[12,13],[1,0],[0,14],[14,16],[0,15],[15,17]];
 const COLORS = [[255,0,0],[255,85,0],[255,170,0],[255,255,0],[170,255,0],[85,255,0],[0,255,0],[0,255,85],[0,255,170],
   [0,255,255],[0,170,255],[0,85,255],[0,0,255],[85,0,255],[170,0,255],[255,0,255],[255,0,170],[255,0,85]];
+const CONTROLNET_FILE = 'openpose_controlnet.png';
+const CONTROLNET_SIZE = 1024;
 const DEPTH_TOLERANCE = 3;
 const $ = id => document.getElementById(id);
 const canvas = (width, height) => Object.assign(document.createElement('canvas'), { width, height });
@@ -73,6 +75,45 @@ function drawSkeleton(context, body, hands, width, height) {
   }
 }
 
+export function drawControlNetSkeleton(context, body, sourceWidth, sourceHeight) {
+  const { width, height } = context.canvas;
+  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const offsetX = (width - sourceWidth * scale) / 2;
+  const offsetY = (height - sourceHeight * scale) / 2;
+  const maxSide = Math.max(width, height);
+  // Xinsir's published size buckets apply at the final canvas size.
+  const radius = 4 * (maxSide < 500 ? 1 : Math.min(7, 2 + Math.floor(maxSide / 1000)));
+  const points = body.map(point => point?.inFrame
+    ? { x: offsetX + point.x * scale, y: offsetY + point.y * scale } : null);
+
+  context.fillStyle = '#000';
+  context.fillRect(0, 0, width, height);
+  context.save();
+  context.beginPath();
+  context.rect(offsetX, offsetY, sourceWidth * scale, sourceHeight * scale);
+  context.clip();
+  LINKS.forEach(([a, b], i) => {
+    const p = points[a], q = points[b];
+    if (!p || !q) return;
+    const dx = p.x - q.x, dy = p.y - q.y;
+    const angle = Math.trunc(THREE.MathUtils.radToDeg(Math.atan2(dy, dx)));
+    context.fillStyle = `rgb(${COLORS[i].map(value => Math.floor(value * .6)).join(',')})`;
+    context.beginPath();
+    context.ellipse(Math.trunc((p.x + q.x) / 2), Math.trunc((p.y + q.y) / 2),
+      Math.trunc(Math.hypot(dx, dy) / 2), radius, THREE.MathUtils.degToRad(angle), 0, Math.PI * 2);
+    context.fill();
+  });
+  points.forEach((point, i) => {
+    if (!point) return;
+    context.fillStyle = `rgb(${COLORS[i].join(',')})`;
+    context.beginPath();
+    context.arc(Math.trunc(point.x), Math.trunc(point.y), radius, 0, Math.PI * 2);
+    context.fill();
+  });
+  context.restore();
+  return { fit: { scale, offsetX, offsetY }, limbHalfWidthPx: radius, jointRadiusPx: radius };
+}
+
 async function encodeDecode(source) {
   const blob = await new Promise((resolve, reject) => source.toBlob(value => value ? resolve(value) : reject(new Error('PNG encoding failed.')), 'image/png'));
   const bitmap = await createImageBitmap(blob);
@@ -109,6 +150,7 @@ function depthSamples(image, meshes, camera, range) {
 
 export function setupControlExport({ mannequin, getPose, captureCompleteExport, createZip, status }) {
   const dialog = $('control-dialog'), overlay = $('control-overlay'), poseCanvas = $('control-pose'), depthCanvas = $('control-depth');
+  const includeControlNet = $('control-sdxl');
   let renderer, controls, scene, meshes, camera, bounds, sourcePoints, snapshot, completeSnapshot, reference, last, validated, busy = false;
   const surface = new THREE.MeshStandardMaterial({ color: 0xc9c9c9, roughness: 1 });
   const depthMaterial = new THREE.ShaderMaterial({
@@ -118,9 +160,14 @@ export function setupControlExport({ mannequin, getPose, captureCompleteExport, 
     toneMapped: false,
   });
 
+  function invalidateValidation() {
+    validated = null; $('download-control-export').disabled = true;
+    $('control-validation').textContent = 'Not validated · inspect the overlay, then validate the PNGs.';
+  }
+
   function render() {
     if (!scene || busy) return;
-    validated = null; $('download-control-export').disabled = true;
+    invalidateValidation();
     const [width, height] = $('control-size').value.split('x').map(Number);
     camera.aspect = width / height; camera.fov = Number($('control-fov').value);
     $('control-fov-value').textContent = `${camera.fov}°`;
@@ -162,7 +209,6 @@ export function setupControlExport({ mannequin, getPose, captureCompleteExport, 
       depth: { ...range, encoding: '8-bit grayscale, linear camera-space distance; nearer=brighter; background=0; surfaces=1..255' },
       camera: { type: 'perspective', fov: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far,
         position: camera.position.toArray(), target: controls.target.toArray(), worldMatrix: camera.matrixWorld.toArray(), projectionMatrix: camera.projectionMatrix.toArray() } };
-    $('control-validation').textContent = 'Not validated · inspect the overlay, then validate the PNGs.';
     $('control-warnings').replaceChildren(...warnings.map(warning => { const item = document.createElement('li'); item.textContent = warning; return item; }));
   }
 
@@ -225,13 +271,31 @@ export function setupControlExport({ mannequin, getPose, captureCompleteExport, 
   $('control-size').addEventListener('change', render);
   $('control-fov').addEventListener('input', render);
   $('control-hands').addEventListener('change', render);
+  includeControlNet.addEventListener('change', invalidateValidation);
   $('validate-control-export').addEventListener('click', async () => {
     if (busy) return;
     validated = null; setBusy(true); $('control-validation').textContent = 'Validating encoded PNGs and surface depth…';
     try {
       const files = [];
+      const cameraId = 'control-perspective';
+      let guideResolution;
       for (const [name, source] of [['openpose.png', poseCanvas], ['depth.png', depthCanvas], ['reference.png', reference], ['overlay.png', overlay]]) {
         const encoded = await encodeDecode(source); files.push({ name, data: encoded.data, decoded: encoded.decoded });
+      }
+      if (includeControlNet.checked) {
+        const source = canvas(CONTROLNET_SIZE, CONTROLNET_SIZE);
+        const drawing = drawControlNetSkeleton(source.getContext('2d'), last.body, last.width, last.height);
+        const { data, decoded } = await encodeDecode(source);
+        if (decoded.width !== CONTROLNET_SIZE || decoded.height !== CONTROLNET_SIZE) {
+          throw new Error(`${CONTROLNET_FILE} must be ${CONTROLNET_SIZE} × ${CONTROLNET_SIZE}.`);
+        }
+        guideResolution = { width: decoded.width, height: decoded.height };
+        files.push({ name: CONTROLNET_FILE, data, decoded, metadata: {
+          resolution: guideResolution,
+          sourceViewport: { x: 0, y: 0, width: last.width, height: last.height, origin: 'top-left' },
+          cameraId, jointConvention: 'COCO_18', renderingConvention: 'xinsir-openpose-sdxl-1.0-canvas-v1',
+          handOverlay: false, ...drawing,
+        } });
       }
       for (const file of files) {
         const data = pixels(file.decoded);
@@ -272,6 +336,10 @@ export function setupControlExport({ mannequin, getPose, captureCompleteExport, 
         const encoded = await encodeDecode(source); files.push({ name, data: encoded.data });
       }
       const checks = { pngRoundTripExact: true, matchingDimensions: true, opaque: true, grayscaleDepth: true,
+        ...(guideResolution && {
+          matchingDimensionsScope: 'legacy-pngs',
+          controlNetGuideDimensions: { ...guideResolution, matchesTarget: true },
+        }),
         surfaceDepth: { count: samples.length, maxError, tolerance: DEPTH_TOLERANCE, samples },
         matchingDataBoundaries: true, exactSegmentationPalette: true,
         preciseDepth: { count: preciseSamples.length, maxError: preciseError, tolerance: 16,
@@ -282,7 +350,6 @@ export function setupControlExport({ mannequin, getPose, captureCompleteExport, 
         textFile('README.txt', 'ThreeJSPoser control maps prototype\n\nUse openpose.png with an SD 1.5 OpenPose ControlNet and depth.png with an SD 1.5 depth ControlNet (control_v11f1p_sd15_depth). These maps are already prepared: bypass pose/depth preprocessors.\nKeep the exported aspect ratio and identical framing for both maps.\nreference.png and overlay.png are inspection images, not control maps.\nvalidation.json records the perspective camera, pixel-space landmarks, depth convention and decoded-PNG checks. pose.json is the unchanged editor pose snapshot.\n\nNose, eyes and ears are approximate head-surface anchors that follow head rotation. Face expressions are not supplied; hand tips derive from finger geometry. Hidden joints are retained. Check overlap manually. Depth contains segmented mannequin proportions.\nPassing checks does not establish 90% generated-image fidelity or replace testing in ComfyUI/Forge.\n'));
       files.push(textFile('pose-export.json', JSON.stringify(complete, null, 2)),
         textFile('decode-depth.js', `// Read raw PNG R/G bytes; range is manifest.depth. Zero returns null (background).\nexport ${decodeDepth16.toString()}\n`));
-      const cameraId = 'control-perspective';
       const conventions = { worldUnits: 'metres', handedness: 'right-handed', worldUp: '+Y', anatomicalLeft: '+X',
         imageOrigin: 'top-left', imageX: 'right', imageY: 'down', pixelCoordinates: 'continuous image-edge coordinates; pixel centers are (column+0.5,row+0.5)',
         normalizedCoordinates: '[x/width,y/height]; not clamped', cameraDepth: '-cameraSpace.z in metres' };
@@ -317,6 +384,7 @@ export function setupControlExport({ mannequin, getPose, captureCompleteExport, 
         omittedGroups: last.hands.length ? [] : ['hands-disabled-by-user'] };
       files.push(textFile('landmarks.json', JSON.stringify(landmarks, null, 2)));
       const roles = { 'openpose.png': 'body-and-optional-hand-conditioning', 'depth.png': '8-bit-depth-conditioning',
+        [CONTROLNET_FILE]: 'sdxl-openpose-body-conditioning',
         'reference.png': 'mannequin-inspection-legacy-alias', 'overlay.png': 'skeleton-alignment-inspection',
         'mannequin.png': 'mannequin-render', 'silhouette.png': 'binary-mask', 'segmentation.png': 'body-part-labels',
         'depth16.png': 'packed-16-bit-depth-validation', 'validation.json': 'validation-report', 'pose.json': 'legacy-editable-pose',
@@ -331,7 +399,8 @@ export function setupControlExport({ mannequin, getPose, captureCompleteExport, 
         rendering: { threeVersion: complete.coordinateSystem.threeVersion, referenceMaterial: 'uniform gray',
           lighting: 'Hemisphere white/0x555555 intensity 2; directional white intensity 2 at (-3,4,5)',
           pixelRatio: 1, toneMapping: 'none', dataPassColorSpace: 'none' },
-        files: await Promise.all(files.map(async file => ({ name: file.name, role: roles[file.name], sha256: await sha256(file.data) }))) };
+        files: await Promise.all(files.map(async file => ({ name: file.name, role: roles[file.name],
+          sha256: await sha256(file.data), ...file.metadata }))) };
       files.push(textFile('manifest.json', JSON.stringify(manifest, null, 2)));
       validated = files.map(({ name, data }) => ({ name, data }));
       $('control-validation').textContent = `PNG checks passed · ${samples.length} surface samples · max depth error ${maxError}/255. Review warnings before use.`;

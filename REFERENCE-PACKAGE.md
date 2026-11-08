@@ -5,16 +5,17 @@ perspective camera, select **Validate PNGs**, then **Download validated ZIP**.
 Reopen the dialog to capture pose edits. Validation and download do not change
 the editor pose or saved files.
 
-The image camera and automatic framing behavior are unchanged. Every image and
-projected landmark uses the dialog's captured pose, perspective camera and selected
-resolution. `pose-export.json` retains the existing complete export schema and
-the editor's `camera.front`; **that Front camera is not the package image camera**.
+The legacy images and projected landmarks use the dialog's captured pose,
+perspective camera and selected resolution. `pose-export.json` retains the
+existing complete export schema and the editor's `camera.front`. The package
+images use the separate perspective camera.
 Use `manifest.camera` to reproduce the images. The original complete-pose action
 and legacy pose files remain supported.
 
 | File | Purpose |
 |---|---|
 | `openpose.png` | Existing COCO-18 body guide with optional hands |
+| `openpose_controlnet.png` | Optional 1024 × 1024 COCO-18 body guide for SDXL ControlNet |
 | `depth.png` | Existing opaque 8-bit linear grayscale conditioning depth |
 | `mannequin.png` | Uniform gray mannequin with controlled lighting, without editor helpers |
 | `reference.png` | Backward-compatible identical copy of `mannequin.png` |
@@ -29,6 +30,40 @@ and legacy pose files remain supported.
 | `validation.json` | Decoded PNG checks and sampled independent CPU surface comparisons |
 | `manifest.json` | Camera, conventions, palette, depth range, shared snapshot ID and SHA-256 file hashes |
 | `README.txt` | Package usage and encoding information |
+
+## Optional SDXL ControlNet guide
+
+In **Control maps prototype**, check **Include 1024 × 1024 SDXL ControlNet
+guide**, validate the PNGs, then download the ZIP. Use
+`openpose_controlnet.png` directly as the pose hint for 1024 × 1024 generation,
+with the pose preprocessor bypassed. The option is off by default. The legacy
+**Image size** and **Include hands** controls still apply to the original outputs.
+
+The guide uses the same projected landmarks and perspective `manifest.camera`
+as the package mannequin. Its source viewport is the full legacy export canvas.
+The fit uses `scale = min(targetWidth/sourceWidth, targetHeight/sourceHeight)`
+and centers the scaled viewport on black. Each target coordinate is the
+corresponding source coordinate multiplied by that scale and translated by the
+recorded offset. The fitted viewport is clipped at its original boundaries.
+Changing the guide option leaves the package camera and framing as captured.
+
+The renderer draws the 17 COCO-18 edges with the Xinsir RGB palette at 60%
+intensity, then draws full-color dots for the available in-frame body points,
+including the five body head points. Occluded in-frame points are retained.
+Missing or clipped endpoints suppress their edges, and the guide omits the hand
+overlay. Xinsir's target-size rule gives a 12 px limb semithickness and a 12 px
+joint radius at 1024 × 1024. Centers, major radii and angles are truncated as in
+the published routine. Canvas uses antialiased ellipses and circles in place of
+OpenCV polygon and circle rasterization, so boundary pixels can differ.
+[Xinsir's published draw routine](https://huggingface.co/xinsir/controlnet-openpose-sdxl-1.0#replace-the-default-draw-pose-function-to-get-better-result)
+
+The optional entry in `manifest.files` records the role, target resolution,
+camera ID, source viewport, scale, offsets, conventions, hand policy and SHA-256
+hash. The top-level resolution and snapshot ID keep their original meaning.
+When the guide is included, `validation.json` scopes `checks.matchingDimensions`
+to the legacy PNGs and reports the guide's decoded dimensions and target match
+in `checks.controlNetGuideDimensions`.
+Pose fidelity with the target checkpoint still requires a ComfyUI comparison.
 
 ## Data passes and precision
 

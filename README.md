@@ -2,7 +2,7 @@
 
 ThreeJSPoser is a local 3D pose editor that helps artists create precise visual references for AI image generation. Pose a procedural mannequin, inspect joint angles, and save or share the pose as JSON. It does not generate images itself.
 
-> **Alpha version — extensive testing required.** ThreeJSPoser, including the new
+> **Alpha version — extensive testing required.** ThreeJSPoser, including the
 > OpenPose + depth export workflow, is experimental. Automated checks cover specific
 > scenarios; results still need extensive testing across poses, camera angles,
 > overlapping limbs, foreshortening, and actual ComfyUI/Forge generation workflows.
@@ -14,6 +14,7 @@ ThreeJSPoser is a local 3D pose editor that helps artists create precise visual 
 - Lets you pose directly in 3D or set exact local-axis rotations in degrees.
 - Supports undo/redo, optional joint limits, hand presets, and JSON pose files.
 - Exports aligned OpenPose and depth images with previews and local PNG validation for testing with SD 1.5 MultiControlNet in ComfyUI or Forge.
+- Offers an optional 1024 × 1024 body-only OpenPose guide for Xinsir SDXL ControlNet.
 - Runs locally without model downloads, cloud accounts, telemetry or CDN requests.
 
 Use a saved pose or a screenshot of the mannequin as a visual guide when writing an image prompt or preparing a reference for an AI image tool. The editor does not connect to an AI service.
@@ -82,8 +83,8 @@ fits the mannequin at the selected aspect ratio. Reopen the dialog to capture po
 The three previews show the mannequin/skeleton overlay, OpenPose, and depth.
 **Validate PNGs** encodes and decodes the actual output images, checks exact pixel
 round trips, opacity and grayscale depth, and compares sampled depth pixels with
-independent CPU ray/triangle intersections. Camera, size, or hand-option changes
-invalidate the result. Empty/unverifiable framing blocks download; cropped
+independent CPU ray/triangle intersections. Camera, size, or export-option changes
+invalidate the result. Empty or unverifiable framing blocks download. Cropped
 landmarks and surfaces produce explicit warnings.
 
 Depth comparisons use locally smooth pixel neighborhoods to avoid false failures
@@ -93,8 +94,8 @@ depth preview before using the maps.
 
 **Download validated ZIP** includes `openpose.png`, `depth.png`, `reference.png`,
 `overlay.png`, the unchanged `pose.json`, and `validation.json` with camera matrices,
-pixel-space/world-space landmarks, depth range, warnings and sample errors. All
-images share one pose snapshot, camera, crop and resolution. Depth is opaque
+pixel-space/world-space landmarks, depth range, warnings and sample errors. The
+legacy images share one pose snapshot, camera, crop and resolution. Depth is opaque
 8-bit grayscale: nearer surfaces are brighter, background is black. The linear
 camera-space distance range is recorded in the report. Inspection images are not
 control maps.
@@ -122,6 +123,22 @@ not establish generated-image fidelity or guarantee a 90% pose match: that still
 requires evaluation with the chosen checkpoint and character reference in ComfyUI
 or Forge. No generation service, model download or new runtime dependency is added.
 
+### Optional 1024 × 1024 SDXL guide
+
+1. Open **Export references → Control maps prototype**.
+2. Check **Include 1024 × 1024 SDXL ControlNet guide**, then select **Validate PNGs** and **Download validated ZIP**.
+3. Use `openpose_controlnet.png` as the pose hint for a 1024 × 1024 ComfyUI workflow with Xinsir ControlNet OpenPose SDXL 1.0. Bypass pose preprocessing.
+
+The guide uses COCO-18 body landmarks and Xinsir's recommended stroke thickness.
+It fits the captured perspective view onto a square black canvas without stretching
+or cropping the source viewport. The guide omits hands and the option defaults to off.
+The ZIP retains the original `openpose.png` and depth maps at the selected **Image size**.
+
+The guide's manifest entry records its own dimensions and fit transform.
+`validation.json` checks the guide against its 1024 × 1024 target separately from
+the shared dimensions of the legacy PNGs. Generated pose fidelity with the SDXL
+checkpoint remains unverified. [Reference package conventions](REFERENCE-PACKAGE.md#optional-sdxl-controlnet-guide)
+
 ## Compact implementation
 
 - `src/rig.js`: rig definition, joint limits and pose validation, independent of the renderer.
@@ -138,7 +155,9 @@ After `npm install`, run `npx playwright install chromium` once to install the b
 Control-map tests exercise the UI through validation and ZIP download, then inspect
 the exported images and pose. Coverage includes alignment, opacity, depth values,
 a reaching arm, crossed-arm overlap, rotated views with antialiased boundaries,
-camera changes, cropping warnings and empty-frame rejection. **These tests do not
+camera changes, cropping warnings and empty-frame rejection. SDXL guide tests
+check both overhead-arm poses, pixel colors and stroke widths, dimensions,
+clipping, repeatability and legacy export preservation. **These tests do not
 run Stable Diffusion. Extensive end-to-end testing in ComfyUI/Forge with different
 poses, checkpoints, control settings and character references is still required
 before relying on this alpha workflow.**

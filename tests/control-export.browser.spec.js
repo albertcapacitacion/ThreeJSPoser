@@ -70,7 +70,8 @@ async function verifyPackage(page, files) {
       const c = document.createElement('canvas'); c.width = image.width; c.height = image.height;
       const context = c.getContext('2d'); context.drawImage(image, 0, 0);
       decoded[name] = context.getImageData(0, 0, c.width, c.height).data;
-      if (c.width !== manifest.resolution.width || c.height !== manifest.resolution.height) throw new Error('Image size mismatch');
+      const size = manifest.files.find(file => file.name === name).resolution ?? manifest.resolution;
+      if (c.width !== size.width || c.height !== size.height) throw new Error('Image size mismatch');
     }
     const silhouette = decoded['silhouette.png'], segments = decoded['segmentation.png'], precise = decoded['depth16.png'];
     const palette = new Set(manifest.segmentation.palette.map(entry => entry.rgb.join(',')));
@@ -114,6 +115,22 @@ function checkProjection(report) {
     expect(point.x).toBeCloseTo(report.width / 2 * (1 + vx * scale / (-vz * report.camera.aspect)), 7);
     expect(point.y).toBeCloseTo(report.height / 2 * (1 - vy * scale / -vz), 7);
   }
+}
+
+const compatibilityFile = 'openpose_controlnet.png';
+const compatibilityOption = page => page.getByRole('checkbox', { name: 'Include 1024 × 1024 SDXL ControlNet guide' });
+const black = [0, 0, 0, 255];
+
+function fitted(point, report) {
+  const scale = 1024 / Math.max(report.width, report.height);
+  return {
+    x: (1024 - report.width * scale) / 2 + point.x * scale,
+    y: (1024 - report.height * scale) / 2 + point.y * scale,
+  };
+}
+
+function midpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
 // Decode the actual downloaded PNGs, not application internals or regenerated maps.
@@ -315,7 +332,7 @@ test('camera controls invalidate validation, cropping is flagged, and empty fram
   await expect(page.locator('#download-control-export')).toBeDisabled();
 });
 
-test('crossed arms export the front limb depth where their projections overlap', async ({ page }) => {
+test('crossed arms keep their guide connections and export front limb depth at the overlap', async ({ page }) => {
   await page.locator('#limits').uncheck();
   for (const [joint, angles] of [
     ['leftShoulder', [0, 35, -90]], ['rightShoulder', [0, -15, 90]],
@@ -326,7 +343,9 @@ test('crossed arms export the front limb depth where their projections overlap',
       await page.locator(`#angle-${axis}`).fill(String(angles[i])); await page.locator(`#angle-${axis}`).press('Tab');
     }
   }
-  await openPrototype(page); await validate(page);
+  await openPrototype(page);
+  await compatibilityOption(page).check();
+  await validate(page);
   const files = unzip(await download(page, '#download-control-export')), report = JSON.parse(files['validation.json']);
   await verifyPackage(page, files);
   // At world x=0 both upper arms share their shoulder height. Left has greater +Z
@@ -347,9 +366,12 @@ test('crossed arms export the front limb depth where their projections overlap',
   expect(hit?.object.userData.jointId).toBe('leftShoulder');
   const distance = -hit.point.clone().applyMatrix4(camera.matrixWorldInverse).z;
   const expected = Math.round(255 * (report.depth.far - distance) / (report.depth.far - report.depth.near));
-  const decoded = await inspectFiles(page, files, report, [probe]);
+  expect(report.body[7].x).toBeLessThan(report.body[4].x); // Wrists cross the anatomical sides.
+  const poseProbes = [[3, 4], [6, 7]].map(([a, b]) => fitted(midpoint(report.body[a], report.body[b]), report));
+  const decoded = await inspectFiles(page, files, report, [probe, ...poseProbes]);
   expect(Math.abs(decoded['depth.png'].probes[0][0] - expected)).toBeLessThanOrEqual(3);
   expect(decoded['segmentation.png'].probes[0]).toEqual([255, 0, 0, 255]); // Anatomical left upper arm wins the crossing.
+  expect(decoded[compatibilityFile].probes.slice(1)).toEqual([[153, 153, 0, 255], [51, 153, 0, 255]]);
 });
 
 test('validates and downloads a rotated view with antialiased depth boundaries', async ({ page }) => {
@@ -391,9 +413,125 @@ test('unchanged package repeats exactly and size changes produce a new snapshot 
   expect(changed.manifest.resolution).toEqual({ width: 512, height: 512 });
 });
 
+for (const [side, z, start, colors] of [
+  ['left', 150, 5, [[85, 255, 0, 255], [0, 255, 0, 255], [0, 255, 85, 255], [102, 153, 0, 255], [51, 153, 0, 255]]],
+  ['right', -150, 2, [[255, 170, 0, 255], [255, 255, 0, 255], [170, 255, 0, 255], [153, 102, 0, 255], [153, 153, 0, 255]]],
+]) test(`downloads a body-only SDXL guide with the ${side} arm overhead`, async ({ page }, testInfo) => {
+  await page.getByLabel('Selected joint', { exact: true }).selectOption(`${side}Shoulder`);
+  const angle = page.getByRole('spinbutton', { name: 'Z rotation in degrees' });
+  await angle.fill(String(z));
+  await angle.press('Tab');
+  const poseBefore = JSON.parse(await download(page, '#export'));
+  await openPrototype(page);
+  const option = compatibilityOption(page);
+  await expect(option).not.toBeChecked();
+  await validate(page);
+  const legacyZip = await download(page, '#download-control-export');
+  const legacy = unzip(legacyZip);
+  expect(legacy[compatibilityFile]).toBeUndefined();
+  const legacyReport = JSON.parse(legacy['validation.json']);
+  expect(legacyReport.checks.matchingDimensions).toBe(true);
+  expect(legacyReport.checks).not.toHaveProperty('matchingDimensionsScope');
+  expect(legacyReport.checks).not.toHaveProperty('controlNetGuideDimensions');
+  await option.check();
+  await expect(page.locator('#download-control-export')).toBeDisabled();
+  await validate(page);
+  const zip = await download(page, '#download-control-export');
+  const files = unzip(zip);
+  const { manifest, report } = await verifyPackage(page, files);
+  expect(report.body.map(point => point.name)).toEqual([
+    'nose', 'neck', 'rightShoulder', 'rightElbow', 'rightWrist', 'leftShoulder', 'leftElbow', 'leftWrist',
+    'rightHip', 'rightKnee', 'rightAnkle', 'leftHip', 'leftKnee', 'leftAnkle', 'rightEye', 'leftEye', 'rightEar', 'leftEar',
+  ]);
+  const entry = manifest.files.find(file => file.name === compatibilityFile);
+  expect(entry).toMatchObject({
+    role: 'sdxl-openpose-body-conditioning', resolution: { width: 1024, height: 1024 },
+    sourceViewport: { x: 0, y: 0, width: 512, height: 768, origin: 'top-left' }, cameraId: manifest.camera.id,
+    jointConvention: 'COCO_18', renderingConvention: 'xinsir-openpose-sdxl-1.0-canvas-v1',
+    handOverlay: false, limbHalfWidthPx: 12, jointRadiusPx: 12,
+  });
+  expect(entry.fit.scale).toBeCloseTo(4 / 3, 12);
+  expect(entry.fit.offsetX).toBeCloseTo(512 / 3, 12);
+  expect(entry.fit.offsetY).toBe(0);
+  const { matchingDimensionsScope, controlNetGuideDimensions, ...legacyChecks } = report.checks;
+  expect(matchingDimensionsScope).toBe('legacy-pngs');
+  expect(controlNetGuideDimensions).toEqual({ width: 1024, height: 1024, matchesTarget: true });
+  expect({ ...report, checks: legacyChecks }).toEqual(legacyReport);
+  const { files: entries, ...snapshot } = manifest;
+  const legacyManifest = JSON.parse(legacy['manifest.json']);
+  const validationEntry = legacyManifest.files.find(file => file.name === 'validation.json');
+  const legacyEntries = entries.filter(file => file.name !== compatibilityFile)
+    .map(file => file.name === 'validation.json' ? { ...file, sha256: validationEntry.sha256 } : file);
+  expect({ ...snapshot, files: legacyEntries }).toEqual(legacyManifest);
+  for (const [name, data] of Object.entries(legacy)) {
+    if (name !== 'manifest.json' && name !== 'validation.json') expect(files[name].equals(data), name).toBe(true);
+  }
+  checkProjection(report);
+  expect(report.body[5].x).toBeGreaterThan(report.body[2].x);
+  const arm = report.body.slice(start, start + 3);
+  expect(arm.every(point => point.inFrame)).toBe(true);
+  const [shoulder, elbow, wrist] = arm.map(point => fitted(point, report));
+  expect(wrist.y).toBeLessThan(elbow.y);
+  expect(elbow.y).toBeLessThan(shoulder.y);
+  const upper = midpoint(shoulder, elbow), forearm = midpoint(elbow, wrist);
+  const dx = elbow.x - shoulder.x, dy = elbow.y - shoulder.y, length = Math.hypot(dx, dy);
+  const offAxis = distance => ({ x: upper.x + dy * distance / length, y: upper.y - dx * distance / length });
+  const tip = report.hands.flat().find(point => point.name === `${side}IndexTip`);
+  expect(tip.inFrame).toBe(true);
+  const legEdges = [[8, 9], [9, 10], [11, 12], [12, 13]].map(([a, b]) =>
+    fitted(midpoint(report.body[a], report.body[b]), report));
+  const head = [14, 15, 16, 17, 0].map(index => fitted(report.body[index], report));
+  const probes = [shoulder, elbow, wrist, upper, forearm, offAxis(10), offAxis(15),
+    { x: wrist.x, y: wrist.y - 9 }, { x: wrist.x, y: wrist.y - 15 }, fitted(tip, report),
+    { x: 100, y: 512 }, ...legEdges, ...head];
+  const decoded = (await inspectFiles(page, files, report, probes))[compatibilityFile];
+  expect(decoded).toMatchObject({ width: 1024, height: 1024, opaque: true, corner: black });
+  expect(decoded.probes.slice(0, 11)).toEqual([...colors, colors[3], black, colors[2], black, black, black]);
+  expect(decoded.probes.slice(11, 15)).toEqual([
+    [0, 153, 51, 255], [0, 153, 102, 255], [0, 102, 153, 255], [0, 51, 153, 255],
+  ]);
+  expect(decoded.probes.slice(15)).toEqual([
+    [170, 0, 255, 255], [255, 0, 255, 255], [255, 0, 170, 255], [255, 0, 85, 255], [255, 0, 0, 255],
+  ]);
+  await validate(page);
+  expect((await download(page, '#download-control-export')).equals(zip)).toBe(true);
+
+  if (side === 'right') {
+    await page.locator('#control-fov').fill('30');
+    await validate(page);
+    const croppedFiles = unzip(await download(page, '#download-control-export'));
+    const cropped = JSON.parse(croppedFiles['validation.json']);
+    const [, croppedElbow, croppedWrist] = cropped.body.slice(start, start + 3);
+    expect(croppedElbow.inFrame).toBe(true);
+    expect(croppedWrist.inFrame).toBe(false);
+    const location = fitted(midpoint(croppedElbow, croppedWrist), cropped);
+    const [forearmPixel, elbowPixel] = (await inspectFiles(page, croppedFiles, cropped,
+      [location, fitted(croppedElbow, cropped)]))[compatibilityFile].probes;
+    expect(forearmPixel).toEqual(black);
+    expect(elbowPixel).toEqual(colors[1]);
+  }
+
+  await page.locator('#close-control-export').click();
+  expect(JSON.parse(await download(page, '#export'))).toEqual(poseBefore);
+  if (side === 'left') {
+    const panels = [['mannequin.png', 'Reference mannequin'], ['openpose.png', 'Legacy OpenPose'], [compatibilityFile, 'SDXL ControlNet']];
+    await page.setContent(`<style>
+      body{margin:0;background:#15191d;color:#fff;font:16px system-ui}
+      main{box-sizing:border-box;width:1140px;padding:24px}
+      h1{margin:0;font-size:24px}p{margin:8px 0 20px;color:#d2d8dc}
+      section{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+      figure{margin:0}figcaption{margin-bottom:8px}img{display:block;width:100%;aspect-ratio:1;object-fit:contain;background:#000}
+      </style><main><h1>Left arm overhead</h1><p>Same pose and perspective camera. Images fitted to equal display areas.</p>
+      <section>${panels.map(([name, label]) => `<figure><figcaption>${label}</figcaption>
+        <img src="data:image/png;base64,${files[name].toString('base64')}"></figure>`).join('')}</section></main>`);
+    await page.locator('img').evaluateAll(images => Promise.all(images.map(image => image.decode())));
+    const path = testInfo.outputPath('overhead-controlnet-comparison.png');
+    await page.locator('main').screenshot({ path });
+    await testInfo.attach('overhead-controlnet-comparison', { path, contentType: 'image/png' });
+  }
+});
+
 for (const [name, rotations] of [
-  ['raised left arm', [['leftShoulder', [-110, 0, 100]]]],
-  ['raised right arm', [['rightShoulder', [-110, 0, -100]]]],
   ['bent knee', [['leftKnee', [95, 0, 0]]]],
   ['rotated torso', [['chest', [0, 35, 15]]]],
   ['crossed legs', [['leftHip', [0, 15, -30]], ['rightHip', [0, -15, 30]]]],
